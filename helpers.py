@@ -1,4 +1,5 @@
 import json
+import re
 
 import curl
 import requests
@@ -41,6 +42,17 @@ class JinkuCrawler:
         JINKU_PAYLOAD["updates"][0]["payload"]["params"].extend(payload_to_set)
         return json.dumps(JINKU_PAYLOAD)
 
+
+    @staticmethod
+    def extract_cookies(set_cookie_header):
+        logger.debug("Extracting Cookies from the Cookie header")
+        cookies = []
+        for cookie in set_cookie_header.split(", "):
+            key_value = cookie.split(";")[0]  # Get only key=value before ";"
+            cookies.append(key_value)
+        cookie_string= ";".join(cookies)
+        return re.sub(r';\s*\d{2}\s\w+\s\d{4}.*?(?=;|$)', '', cookie_string)
+
     def set_cookies(self):
         logger.debug("Setting New Cookies")
         payload = self.set_payload(["profileType", None])
@@ -49,15 +61,11 @@ class JinkuCrawler:
         JINKU_HEADERS.pop("x-csrf-token", None)
 
         response = self.send_request(url=JINKU_GET_COOKIE_URL, headers=JINKU_HEADERS, payload=payload,method="GET")
-        self.cookie = ""
-        self.xsrf_token = ""
 
         if response.status_code==200:
             logger.info("Successfully Received Response")
-            for header in response.headers:
-                if header == "Set-Cookie":
-                    logger.debug(f"Cookie Receeived - {response.headers.get("Set-Cookie").split(";")[0] + ";"}")
-                    self.cookie += response.headers.get("Set-Cookie").split(";")[0] + ";"
+
+            self.cookie=self.extract_cookies(response.headers.get("Set-Cookie"))
             self.xsrf_token = response.cookies.get("XSRF-TOKEN")
 
             logger.info(f"New XSRF Token - {self.xsrf_token}")
