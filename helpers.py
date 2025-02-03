@@ -5,7 +5,7 @@ import curl
 import requests
 from bs4 import BeautifulSoup
 
-from config import JINKU_MAX_RETRIES
+from config import JINKU_MAX_RETRIES, JINKU_COOKIE, JINKU_CSRF_TOKEN
 from constants import JINKU_BRANDS, JINKU_PAYLOAD, JINKU_CATALOG_URL, JINKU_HEADERS, JINKU_GET_COOKIE_URL
 from db import jinku_models_collection
 from logger import logger
@@ -46,29 +46,34 @@ class JinkuCrawler:
 
     def set_cookies(self):
         logger.debug("Setting New Cookies")
-        payload = self.set_payload(["profileType", None])
+        # payload = self.set_payload(["profileType", None])
+        #
+        # JINKU_HEADERS.pop("cookie", None)
+        # JINKU_HEADERS.pop("x-csrf-token", None)
+        #
+        # response = self.send_request(url=JINKU_GET_COOKIE_URL, headers=JINKU_HEADERS, payload=payload,method="GET")
+        #
+        # curl.parse(response)
+        #
+        # if response.status_code==200:
+        #     logger.info("Successfully Received Response")
+        #
+        #     cookies = response.cookies.get_dict()
+        #     self.cookie = ";".join([f"{key}={value}" for key, value in cookies.items()])
+        #     self.xsrf_token = response.cookies.get("XSRF-TOKEN")
+        #
+        #     logger.info(f"New XSRF Token - {self.xsrf_token}")
+        #     logger.info(f"Complete Cookies - {self.cookie}")
+        #     self.set_headers()
+        #
+        # else:
+        #     logger.error(f"Received Status Code - {response.status_code} - response data - {response.text}")
+        #     raise Exception("Could not set Cookies")
 
-        JINKU_HEADERS.pop("cookie", None)
-        JINKU_HEADERS.pop("x-csrf-token", None)
-
-        response = self.send_request(url=JINKU_GET_COOKIE_URL, headers=JINKU_HEADERS, payload=payload,method="GET")
-
-        curl.parse(response)
-
-        if response.status_code==200:
-            logger.info("Successfully Received Response")
-
-            cookies = response.cookies.get_dict()
-            self.cookie = ";".join([f"{key}={value}" for key, value in cookies.items()])
-            self.xsrf_token = response.cookies.get("XSRF-TOKEN")
-
-            logger.info(f"New XSRF Token - {self.xsrf_token}")
-            logger.info(f"Complete Cookies - {self.cookie}")
-            self.set_headers()
-
-        else:
-            logger.error(f"Received Status Code - {response.status_code} - response data - {response.text}")
-            raise Exception("Could not set Cookies")
+    #     TODO: Not working to dynamically set cookies
+        self.cookie=JINKU_COOKIE
+        self.xsrf_token=JINKU_CSRF_TOKEN
+        self.set_headers()
 
     def set_headers(self):
         logger.debug("Setting headers")
@@ -83,7 +88,6 @@ class JinkuCrawler:
             for retry in range(JINKU_MAX_RETRIES):
                 response = self.send_request(JINKU_CATALOG_URL, JINKU_HEADERS, payload)
 
-                curl.parse(response)
                 if response.status_code == 419:
 
                     soup = BeautifulSoup(response.text, "html.parser")
