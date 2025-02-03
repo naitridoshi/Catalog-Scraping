@@ -3,6 +3,7 @@ import re
 
 import curl
 import requests
+from bs4 import BeautifulSoup
 
 from config import JINKU_MAX_RETRIES
 from constants import JINKU_BRANDS, JINKU_PAYLOAD, JINKU_CATALOG_URL, JINKU_HEADERS, JINKU_GET_COOKIE_URL
@@ -43,16 +44,6 @@ class JinkuCrawler:
         return json.dumps(JINKU_PAYLOAD)
 
 
-    @staticmethod
-    def extract_cookies(set_cookie_header):
-        logger.debug("Extracting Cookies from the Cookie header")
-        cookies = []
-        for cookie in set_cookie_header.split(", "):
-            key_value = cookie.split(";")[0]  # Get only key=value before ";"
-            cookies.append(key_value)
-        cookie_string= ";".join(cookies)
-        return re.sub(r';\s*\d{2}\s\w+\s\d{4}.*?(?=;|$)', '', cookie_string)
-
     def set_cookies(self):
         logger.debug("Setting New Cookies")
         payload = self.set_payload(["profileType", None])
@@ -62,10 +53,13 @@ class JinkuCrawler:
 
         response = self.send_request(url=JINKU_GET_COOKIE_URL, headers=JINKU_HEADERS, payload=payload,method="GET")
 
+        curl.parse(response)
+
         if response.status_code==200:
             logger.info("Successfully Received Response")
 
-            self.cookie=self.extract_cookies(response.headers.get("Set-Cookie"))
+            cookies = response.cookies.get_dict()
+            self.cookie = ";".join([f"{key}={value}" for key, value in cookies.items()])
             self.xsrf_token = response.cookies.get("XSRF-TOKEN")
 
             logger.info(f"New XSRF Token - {self.xsrf_token}")
@@ -79,7 +73,7 @@ class JinkuCrawler:
     def set_headers(self):
         logger.debug("Setting headers")
         JINKU_HEADERS.update({'cookie': self.cookie,
-                              'x-csrf-token': self.xsrf_token, })
+                              'x-csrf-token': self.xsrf_token})
 
     def get_model_lists(self):
         logger.info("Getting model lists")
@@ -89,14 +83,19 @@ class JinkuCrawler:
             for retry in range(JINKU_MAX_RETRIES):
                 response = self.send_request(JINKU_CATALOG_URL, JINKU_HEADERS, payload)
 
+                curl.parse(response)
                 if response.status_code == 419:
+
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    title = soup.title.string if soup.title else "No title found"
+
                     if retry == JINKU_MAX_RETRIES - 1:
                         logger.critical(
                             f"Max Retries done -  Received 419 Status Code - Brand - {brand} - Data Received - {response.text}")
                         raise Exception("Max Retries Complete for getting model lists")
 
                     logger.error(
-                        f"Try Request - {retry} - Received 419 Status Code - Brand - {brand} - Data Received - {response.text}")
+                        f"Try Request - {retry} - Received 419 Status Code - Brand - {brand} - Title of Response Received - {title}")
                     self.set_cookies()
 
                 if response.status_code == 200:
@@ -107,12 +106,15 @@ class JinkuCrawler:
                     break
 
                 else:
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    title = soup.title.string if soup.title else "No title found"
+
                     if retry == JINKU_MAX_RETRIES - 1:
                         logger.critical(
                             f"Max Retries done - Received Status Code - {response.status_code} - Brand - {brand} - Data Received - {response.text}")
                         raise Exception("Max Retries Complete for getting model lists")
 
-                    logger.error(f"Received Status Code - {response.status_code} - response data - {response.text}")
+                    logger.error(f"Received Status Code - {response.status_code} - Title of Response Received - {title}")
                     self.set_cookies()
 
         logger.info("Completed Crawling Model lists for all Brands")
