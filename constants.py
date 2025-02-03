@@ -102,6 +102,7 @@ JINKU_BRANDS= {
     "528": "HONDA (DONGFENG)"
 }
 
+JINKU_GET_COOKIE_URL="https://www.jikiu.com/catalogue"
 
 JINKU_CATALOG_URL="https://www.jikiu.com/livewire/message/search-catalogue"
 

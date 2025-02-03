@@ -4,7 +4,7 @@ import curl
 import requests
 
 from config import JINKU_MAX_RETRIES
-from constants import JINKU_BRANDS, JINKU_PAYLOAD, JINKU_CATALOG_URL, JINKU_HEADERS
+from constants import JINKU_BRANDS, JINKU_PAYLOAD, JINKU_CATALOG_URL, JINKU_HEADERS, JINKU_GET_COOKIE_URL
 from db import jinku_models_collection
 from logger import logger
 
@@ -14,10 +14,14 @@ class JinkuCrawler:
     def __init__(self):
         self.cookie = ""
         self.xsrf_token = ""
+        self.set_cookies()
 
     @staticmethod
-    def send_request(url, headers, payload, params=None):
-        response = requests.post(url, headers=headers, data=payload, params=params)
+    def send_request(url, headers, payload, params=None, method="POST"):
+        if method=="POST":
+            response = requests.post(url, headers=headers, data=payload, params=params)
+        else:
+            response = requests.get(url, headers=headers, data=payload, params=params)
         return response
 
     @staticmethod
@@ -41,28 +45,35 @@ class JinkuCrawler:
         logger.debug("Setting New Cookies")
         payload = self.set_payload(["profileType", None])
 
-        if JINKU_HEADERS.get("cookie"):
-            JINKU_HEADERS.pop("cookie")
-        if JINKU_HEADERS.get("x-csrf-token"):
-            JINKU_HEADERS.pop("x-csrf-token")
+        JINKU_HEADERS.pop("cookie", None)
+        JINKU_HEADERS.pop("x-csrf-token", None)
 
-        response = self.send_request(url=JINKU_CATALOG_URL, headers=JINKU_HEADERS, payload=payload)
+        response = self.send_request(url=JINKU_GET_COOKIE_URL, headers=JINKU_HEADERS, payload=payload,method="GET")
         self.cookie = ""
         self.xsrf_token = ""
 
-        for header in response.headers:
-            if header == "Set-Cookie":
-                self.cookie += response.headers.get("Set-Cookie")
-        self.xsrf_token = response.cookies.get("XSRF-TOKEN")
+        if response.status_code==200:
+            logger.info("Successfully Received Response")
+            for header in response.headers:
+                if header == "Set-Cookie":
+                    logger.debug(f"Cookie Receeived - {response.headers.get("Set-Cookie").split(";")[0] + ";"}")
+                    self.cookie += response.headers.get("Set-Cookie").split(";")[0] + ";"
+            self.xsrf_token = response.cookies.get("XSRF-TOKEN")
 
-        self.set_headers()
+            logger.info(f"New XSRF Token - {self.xsrf_token}")
+            logger.info(f"Complete Cookies - {self.cookie}")
+            self.set_headers()
+
+        else:
+            logger.error(f"Received Status Code - {response.status_code} - response data - {response.text}")
+            raise Exception("Could not set Cookies")
 
     def set_headers(self):
+        logger.debug("Setting headers")
         JINKU_HEADERS.update({'cookie': self.cookie,
                               'x-csrf-token': self.xsrf_token, })
 
     def get_model_lists(self):
-        self.set_cookies()
         logger.info("Getting model lists")
         for brand in JINKU_BRANDS:
             logger.info(f"Crawling Model Lists for Brand - {brand} - {JINKU_BRANDS.get(brand)}")
@@ -101,6 +112,5 @@ class JinkuCrawler:
 
 if __name__ == '__main__':
     jinku_crawler = JinkuCrawler()
-    jinku_crawler.set_cookies()
     jinku_crawler.get_model_lists()
     logger.info("DONE")
