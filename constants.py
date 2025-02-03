@@ -1,8 +1,5 @@
-import json
 
-from config import JINKU_CSRF_TOKEN, JINKU_COOKIE
-
-BRANDS= {
+JINKU_BRANDS= {
     "1": "ACURA",
     "2": "ALFA ROMEO",
     "5": "AUDI",
@@ -126,8 +123,6 @@ JINKU_HEADERS = {
     'Upgrade-Insecure-Requests': '1',
     'Referer': 'https://www.google.com/',
     'Origin': 'https://www.google.com/',
-    'cookie':JINKU_COOKIE,
-    'x-csrf-token': JINKU_CSRF_TOKEN,
     'x-livewire': 'true',
     'Content-Type': 'application/json',
 
@@ -339,7 +334,7 @@ JINKU_PAYLOAD ={
         "id": "lt06i",
         "method": "$set",
         "params": [
-          "brand"
+          "profileType",None
         ]
       }
     }
