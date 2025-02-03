@@ -1,0 +1,3 @@
+## Catalog Scraping 
+
+- Only model lists have been scraped from jinku...
