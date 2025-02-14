@@ -2,3 +2,5 @@
 .venv/
 .env
 logs/
+jinku/files/
+*.json

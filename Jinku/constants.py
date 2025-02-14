@@ -105,6 +105,9 @@ JINKU_BRANDS= {
 JINKU_GET_COOKIE_URL="https://www.jikiu.com/catalogue"
 
 JINKU_CATALOG_URL="https://www.jikiu.com/livewire/message/search-catalogue"
+JINKU_PRODUCT_URL="https://www.jikiu.com/catalogue/search-part-number"
+
+JINKU_PRODUCT_URL_PARAMS={"product_id":""}
 
 
 USER_AGENTS = [
