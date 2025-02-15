@@ -1,6 +1,7 @@
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 import urllib3
@@ -9,6 +10,7 @@ from bs4 import BeautifulSoup
 # from common.config import DATA_CENTER_PROXIES
 from common.constants import BASIC_HEADERS
 from common.custom_logger import color_string, get_logger
+from common.db import jinku_products_collection
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -78,57 +80,120 @@ class RequestHelper:
         logger.debug(f'Extracted {len(urls)} URLs')
         return urls
 
-    def store_product_details_in_database(self, url:str, product_details:str,
-                                          specifications_dict:dict, specifications_list:list, crosses_dict:dict, crosses_list:list):
+    @staticmethod
+    def format_and_store_product_details_in_database(url:str, product_details:str, product_images:list,
+                                                     specifications_dict:dict, crosses_list:list):
 
-        product_name=product_details.split("|")[0].strip()
-        jinkiu_product_id=product_details.split("|")[-1].split("-")[-1].strip()
+        if product_details:
+            product_name=product_details.split("|")[0].strip()
+            jinku_product_id=product_details.split("|")[-1].split("-")[-1].strip()
+        else:
+            logger.error("Product Details is None")
+            product_name=None
+            jinku_product_id=None
 
-        required_doc= {"jinku_url": url,"product_name":product_name,
-                       "jinku_product_id":jinkiu_product_id}
+        base_doc= {
+            "jinku_url": url,
+            "product_name":product_name,
+            "product_image":product_images,
+            "jinku_product_id":jinku_product_id,
+            "specifications":specifications_dict
+        }
 
-        if specifications_list:
-           required_doc.update({"specifications":specifications_list})
+        documents_to_insert = []
 
-        if crosses_list:
-            pass
+        for cross in crosses_list:
+            cross_doc = base_doc.copy()
+            if isinstance(cross, dict):
+                cross_doc.update(cross)
+            else:
+                cross_doc.update({cross: None})
+            documents_to_insert.append(cross_doc)
 
+        if documents_to_insert:
+            logger.info(f"Inserting {len(documents_to_insert)} into Jinku Products Collection.")
+            jinku_products_collection.insert_many(documents_to_insert)
 
-    def parse_jinku_data_from_soup(self,soup:BeautifulSoup(),url:str):
+    def parse_jinku_data_from_soup(self,soup:BeautifulSoup, url:str):
+        logger.debug("Parsing Jinku Data from the soup")
+
+        if soup is None:
+            logger.critical("Soup is None")
+            raise Exception("Empty Soup")
+
         name_class = soup.find(class_="d-lg-flex justify-content-between")
-        product_name = name_class.find('h2').text.strip() if name_class else None
+        product_details = name_class.find('h2').text.strip() if name_class else None
+        product_images=[]
+        images = soup.find_all('img')
+        for img in images:
+            if img.get('src'):
+                product_images.append(img.get('src'))
 
-        specification_details = soup.find_all(class_="detail__prop d-flex")
-        specifications_list=[]
+        if len(product_images)==0:
+             logger.warning("Product Image Not found")
+
+        logger.info(f"Product details found - {product_details}")
+
+        specification_region = soup.find(class_="detail__plate row")
+
+        if not specification_region:
+            logger.error("Specification Region Not found")
+
+        specification_details=specification_region.find_all(class_="detail__prop d-flex") if specification_region else []
+        specifications_dict={}
+        unknown_specifications = []
+
+        logger.debug(f"Parsing Specifications Details - "
+                     f"Found {len(list(specification_details))} specifications")
 
         for specifics in specification_details:
             all_p = specifics.find_all('p')
             if len(all_p) == 2:
+                logger.debug("2 p classes found in specifications")
                 key = all_p[0].text.strip()
                 value = all_p[1].text.strip()
-                specifications_list.append({key:value})
+                logger.info(f"Appending Specification - {key} : {value} to list")
+                specifications_dict[key]=value
             else:
                 for p in all_p:
-                    specifications_list.append(p.text.strip())
+                    text_value = p.text.strip()
 
+                    logger.warning(
+                        f"Specification without a key - storing as 'Unknown_{len(unknown_specifications) + 1}'")
+
+                    unknown_specifications.append(text_value)
+                    logger.warning(f"Specification not a dict - appending {p} to list")
+                    unknown_specifications.append(text_value)
+
+        if unknown_specifications:
+            specifications_dict["Miscellaneous"] = unknown_specifications
 
         crosses_details=soup.find(class_="detail__plate detail__plate-crosses")
+        if not crosses_details:
+            logger.error("Crosses Details Not Found")
         crosses_list=[]
+        all_cross_details=crosses_details.find_all(class_='detail__prop d-flex') if crosses_details else []
 
-        for cross in crosses_details:
-            all_cross=cross.find_all(class_='detail__prop d-flex')
+        logger.debug(f"Parsing Crosses Details - "
+                     f"Found {len(list(crosses_details))} crosses")
+
+        for cross in all_cross_details:
+            all_cross=cross.find_all('div')
             if len(all_cross)==2:
+                logger.debug("2 p classes found in crosses")
                 if all_cross[0].text.strip()=="Owner":
+                    logger.info("Skipping Owner Number Class")
                     continue
                 key = all_cross[0].text.strip()
                 value = all_cross[1].text.strip()
-                crosses_list.append({key:value})
+                logger.info(f"Appending Cross - Owner:{key}, Number:{value} to list ")
+                crosses_list.append({"Owner":key, "Number":value})
             else:
                 for item in all_cross:
-                    crosses_list.append(item.text.strip())
+                    logger.warning(f"Cross not a dict - appending {p} to list")
+                    crosses_list.append({"Owner":item.text.strip(),"Number":item.text.strip()})
 
-
-
+        return self.format_and_store_product_details_in_database(url,product_details, product_images, specifications_dict, crosses_list)
 
     def get_data_from_url_using_soup(self, url: str):
         response = self.request(url)
@@ -138,8 +203,15 @@ class RequestHelper:
             f'Got the response for {url}, data length: {len(response.text)}'
         )
         soup = BeautifulSoup(response.text, 'html.parser')
+        search_result_class=soup.find(class_="searchresult")
+        if search_result_class:
+            logger.info("Sending search result class soup to parse")
+            return self.parse_jinku_data_from_soup(search_result_class, url)
+        else:
+            logger.warning("Sending original soup to parse")
+            return self.parse_jinku_data_from_soup(soup, url)
 
-        return self.parse_jinku_data_from_soup(soup, url)
+
 
         # text = soup.text.strip().replace('\n', '').replace('\t', '').replace(
         #     '\r',
@@ -148,48 +220,81 @@ class RequestHelper:
         # cleaned_text = re.sub(r'\s+', ' ', soup.text.strip())
         # return text, cleaned_text
 
+    def process_url(self, url,errored_urls):
+        try:
+            logger.debug(f"Processing URL - {url}")
+            self.get_data_from_url_using_soup(url)
+        except Exception as e:
+            logger.error(f"Error processing {url}: {e}")
+            errored_urls.append(url)
+
     def main(self, main_url,filename):
         urls = self.get_list_of_urls(main_url)
+
         if urls is None or len(urls)==0:
             logger.error('Failed to retrieve URLs')
             return
-        data = []
-        pdf_urls=[]
+
+        pdf_urls = []
+        valid_urls = []
+        errored_urls=[]
 
         for url in urls:
             if not str(url).startswith("http"):
                 full_url = main_url + url
             else:
-                full_url=url
+                full_url = url
 
-            logger.debug(f"Getting url - {full_url}")
+            logger.info(f"Checking URL - {full_url}")
 
-            if 'pdf' in url or 'ebook' in url:
+            if any(ext in full_url for ext in ["pdf", "ebook", "jpg", "png", "jpeg"]):
                 logger.info(f"Skipping - {full_url}")
-                pdf_urls.append(full_url)
+                if 'pdf' in full_url or 'ebook' in full_url:
+                    pdf_urls.append(full_url)
                 continue
 
-            if 'jpg' in url or 'png' in url or 'jpeg' in url:
-                logger.info(f"Skipping - {full_url}")
-                continue
+            valid_urls.append(full_url)
 
-            _data, _cleaned_data = self.get_data_from_url_using_soup(full_url)
-            data.append(
-                {
-                    'url': full_url,
-                    'heading': full_url.split('/')[-1],
-                    'data': _data,
-                    'cleanedData': _cleaned_data
-                }
-            )
+            # Use ThreadPoolExecutor to process URLs in parallel
+            max_threads = min(10, len(valid_urls))  # Use up to 10 threads or the number of URLs
+            with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                future_to_url = {executor.submit(self.process_url, url,errored_urls): url for url in valid_urls}
 
-        with open(filename, 'w') as file:
-            json.dump(data, file, indent=4)
-        logger.debug(f'Data saved to {filename}')
+                for future in as_completed(future_to_url):
+                    url = future_to_url[future]
+                    try:
+                        future.result()
+                        logger.info(f"Successfully processed {url}")
+                    except Exception as e:
+                        logger.error(f"Error processing {url}: {e}")
+                        errored_urls.append(url)
 
-        with open(f"{str(filename).split('.')[0]}_pdf.json", "w") as file:
-            json.dump(pdf_urls, file, indent=4)
-        logger.debug(f'Data saved to {str(filename).split(".")[0]}_pdf.json')
+        #     _data, _cleaned_data = self.get_data_from_url_using_soup(full_url)
+        #     data.append(
+        #         {
+        #             'url': full_url,
+        #             'heading': full_url.split('/')[-1],
+        #             'data': _data,
+        #             'cleanedData': _cleaned_data
+        #         }
+        #     )
+        #
+        # with open(filename, 'w') as file:
+        #     json.dump(data, file, indent=4)
+        # logger.debug(f'Data saved to {filename}')
+        #
+        if pdf_urls:
+            with open(f"{str(filename).split('.')[0]}_pdf.json", "w") as file:
+                json.dump(pdf_urls, file, indent=4)
+            logger.debug(f'PDF urls saved to {str(filename).split(".")[0]}_pdf.json')
+
+        if errored_urls:
+            with open(f"{str(filename).split('.')[0]}_errored.json", "w") as file:
+                json.dump(errored_urls, file, indent=4)
+            logger.debug(f'PDF urls saved to {str(filename).split(".")[0]}_errored.json')
+
+
+        logger.info("All URLs processed successfully!")
 
     @staticmethod
     def clean_text_from_json(filename: str):
