@@ -3,9 +3,10 @@ import json
 import requests
 from bs4 import BeautifulSoup
 
-from config import JINKU_MAX_RETRIES, JINKU_COOKIE, JINKU_CSRF_TOKEN
+from common.config.jinku import JINKU_MAX_RETRIES, JINKU_COOKIE, JINKU_CSRF_TOKEN
 from Jinku.constants import JINKU_BRANDS, JINKU_PAYLOAD, JINKU_CATALOG_URL, JINKU_HEADERS
-from db import jinku_models_collection
+from common.db import jinku_models_collection
+
 from logger import logger
 
 
