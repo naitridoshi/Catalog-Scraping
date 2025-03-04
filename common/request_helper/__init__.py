@@ -2,6 +2,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 import requests
 import urllib3
@@ -108,6 +109,8 @@ class RequestHelper:
                 cross_doc.update(cross)
             else:
                 cross_doc.update({cross: None})
+            cross_doc["createdAt"]= datetime.now(timezone.utc)
+            cross_doc["updatedAt"] = datetime.now(timezone.utc)
             documents_to_insert.append(cross_doc)
 
         if documents_to_insert:
