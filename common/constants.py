@@ -1,3 +1,4 @@
+import multiprocessing
 from random import choice
 
 USER_AGENTS = [
@@ -25,3 +26,6 @@ BASIC_HEADERS = {
 
 SCROLL_TO_END_SCRIPT = 'window.scrollTo(0, document.body.scrollHeight);'
 SCROLL_TO_TOP_SCRIPT = 'window.scrollTo(0, 0);'
+
+BATCH_SIZE = 50
+MAX_PROCESSES = min(4, multiprocessing.cpu_count() // 2)

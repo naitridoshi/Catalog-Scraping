@@ -1,15 +1,18 @@
+import gc
 import json
+import multiprocessing
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 from datetime import datetime, timezone
 
+import psutil
 import requests
 import urllib3
 from bs4 import BeautifulSoup
 
 # from common.config import DATA_CENTER_PROXIES
-from common.constants import BASIC_HEADERS
+from common.constants import BASIC_HEADERS, BATCH_SIZE, MAX_PROCESSES
 from common.custom_logger import color_string, get_logger
 from common.db import jinku_products_collection
 
@@ -23,6 +26,7 @@ class RequestHelper:
     def __init__(self, proxies: dict = None, headers: dict = BASIC_HEADERS):
         self.proxies = proxies
         self.headers = headers
+        self.shared_list = multiprocessing.Manager().list()
 
     def request(self, url: str, method: str = 'GET', timeout: int = 10,params:dict=None,json:dict | list =None,headers:dict=None):
         logger.debug(f"Requesting {url} ...")
@@ -81,8 +85,28 @@ class RequestHelper:
         logger.debug(f'Extracted {len(urls)} URLs')
         return urls
 
+    def insert_to_db_worker(self):
+        """Database worker to insert data in batches from the shared list."""
+        while True:
+            if len(self.shared_list) >= BATCH_SIZE:
+                batch = list(self.shared_list[:BATCH_SIZE])
+                del self.shared_list[:BATCH_SIZE]  # Remove inserted items
+                try:
+                    jinku_products_collection.insert_many(batch)
+                    logger.info(f"Inserted batch of {len(batch)} products.")
+                except Exception as e:
+                    logger.error(f"Batch insertion failed: {e}")
+            time.sleep(1)  # Sleep briefly to avoid busy waiting
+
     @staticmethod
-    def format_and_store_product_details_in_database(url:str, product_details:str, product_images:list,
+    def check_memory():
+        """Check system memory to avoid excessive consumption."""
+        mem = psutil.virtual_memory()
+        memory_available=mem.available / mem.total
+        logger.warning(f"Memory Available - {memory_available}")
+        return memory_available > 0.2  # Ensure at least 20% free memory
+
+    def format_and_store_product_details_in_database(self,url:str, product_details:str, product_images:list,
                                                      specifications_dict:dict, crosses_list:list):
 
         if product_details:
@@ -101,8 +125,6 @@ class RequestHelper:
             "specifications":specifications_dict
         }
 
-        documents_to_insert = []
-
         for cross in crosses_list:
             cross_doc = base_doc.copy()
             if isinstance(cross, dict):
@@ -111,11 +133,9 @@ class RequestHelper:
                 cross_doc.update({cross: None})
             cross_doc["createdAt"]= datetime.now(timezone.utc)
             cross_doc["updatedAt"] = datetime.now(timezone.utc)
-            documents_to_insert.append(cross_doc)
+            self.shared_list.append(cross_doc)
 
-        if documents_to_insert:
-            logger.info(f"Inserting {len(documents_to_insert)} into Jinku Products Collection.")
-            jinku_products_collection.insert_many(documents_to_insert)
+        logger.debug(f"Appended {len(crosses_list)} documents in Shared List .... ")
 
     def parse_jinku_data_from_soup(self,soup:BeautifulSoup, url:str):
         logger.debug("Parsing Jinku Data from the soup")
@@ -215,14 +235,6 @@ class RequestHelper:
             return self.parse_jinku_data_from_soup(soup, url)
 
 
-
-        # text = soup.text.strip().replace('\n', '').replace('\t', '').replace(
-        #     '\r',
-        #     ''
-        # ).replace('\v', '').replace('\f', '').replace('\xa0', '')
-        # cleaned_text = re.sub(r'\s+', ' ', soup.text.strip())
-        # return text, cleaned_text
-
     def process_url(self, url,errored_urls):
         try:
             logger.debug(f"Processing URL - {url}")
@@ -240,7 +252,9 @@ class RequestHelper:
 
         pdf_urls = []
         valid_urls = []
-        errored_urls=[]
+        # Use a Manager list for errored URLs in multiprocessing
+        manager = multiprocessing.Manager()
+        errored_urls = manager.list()
 
         for url in urls:
             if not str(url).startswith("http"):
@@ -258,13 +272,19 @@ class RequestHelper:
 
             valid_urls.append(full_url)
 
-            # Use ThreadPoolExecutor to process URLs in parallel
-            max_threads = min(10, len(valid_urls))  # Use up to 10 threads or the number of URLs
-            with ThreadPoolExecutor(max_workers=max_threads) as executor:
-                future_to_url = {executor.submit(self.process_url, url,errored_urls): url for url in valid_urls}
+        # Start the DB worker process for batch inserts
+        db_worker = multiprocessing.Process(target=self.insert_to_db_worker, daemon=True)
+        db_worker.start()
 
-                for future in as_completed(future_to_url):
-                    url = future_to_url[future]
+        if not self.check_memory():
+            logger.warning("Low memory detected, running sequentially.")
+            for url in valid_urls:
+                self.process_url(url, errored_urls)
+        else:
+            with ProcessPoolExecutor(max_workers=MAX_PROCESSES) as executor:
+                futures = {executor.submit(self.process_url, url, errored_urls): url for url in valid_urls}
+                for future in as_completed(futures):
+                    url = futures[future]
                     try:
                         future.result()
                         logger.info(f"Successfully processed {url}")
@@ -272,20 +292,11 @@ class RequestHelper:
                         logger.error(f"Error processing {url}: {e}")
                         errored_urls.append(url)
 
-        #     _data, _cleaned_data = self.get_data_from_url_using_soup(full_url)
-        #     data.append(
-        #         {
-        #             'url': full_url,
-        #             'heading': full_url.split('/')[-1],
-        #             'data': _data,
-        #             'cleanedData': _cleaned_data
-        #         }
-        #     )
-        #
-        # with open(filename, 'w') as file:
-        #     json.dump(data, file, indent=4)
-        # logger.debug(f'Data saved to {filename}')
-        #
+        db_worker.terminate()
+        db_worker.join()
+
+
+
         if pdf_urls:
             with open(f"{str(filename).split('.')[0]}_pdf.json", "w") as file:
                 json.dump(pdf_urls, file, indent=4)
@@ -293,11 +304,11 @@ class RequestHelper:
 
         if errored_urls:
             with open(f"{str(filename).split('.')[0]}_errored.json", "w") as file:
-                json.dump(errored_urls, file, indent=4)
-            logger.debug(f'PDF urls saved to {str(filename).split(".")[0]}_errored.json')
-
+                json.dump(list(errored_urls), file, indent=4)
+            logger.debug(f'Errored urls saved to {str(filename).split(".")[0]}_errored.json')
 
         logger.info("All URLs processed successfully!")
+
 
     @staticmethod
     def clean_text_from_json(filename: str):
