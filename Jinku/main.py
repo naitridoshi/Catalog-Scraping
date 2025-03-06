@@ -5,9 +5,10 @@ from common.request_helper import RequestHelper
 logger, listener = get_logger("Jinku Scraper")
 listener.start()
 
-request_helper = RequestHelper()
+
 
 if __name__ == '__main__':
+    request_helper = RequestHelper()
     logger.info(f"Getting Data for code - a")
     main_url = f"{JINKU_PRODUCT_URL}?product_id=a"
     request_helper.main(main_url,"files/jinku_products.json")
