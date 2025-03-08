@@ -9,7 +9,9 @@ db= client[DATABASE_NAME]
 jinku_models_collection=db[JINKU_MODELS_COLLECTION_NAME]
 jinku_products_collection=db[JINKU_PRODUCTS_COLLECTION_NAME]
 
-jinku_products_collection.create_index('createdAt')
-jinku_products_collection.create_index('jinku_product_id')
+jinku_products_collection.create_index([("createdAt", -1)])
+jinku_products_collection.create_index([("jinku_product_id", 1)])
+jinku_products_collection.create_index([("jinku_product_id", -1)])
+
 
 
