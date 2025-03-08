@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExec
 from datetime import datetime, timezone
 
 import psutil
+import pytz
 import requests
 import urllib3
 from bs4 import BeautifulSoup
@@ -21,6 +22,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger, listener = get_logger("RequestHelper")
 listener.start()
 
+dubai_tz = pytz.timezone("Asia/Dubai")
 
 class RequestHelper:
     def __init__(self, proxies: dict = None, headers: dict = BASIC_HEADERS):
@@ -131,8 +133,8 @@ class RequestHelper:
                 cross_doc.update(cross)
             else:
                 cross_doc.update({cross: None})
-            cross_doc["createdAt"]= datetime.now(timezone.utc)
-            cross_doc["updatedAt"] = datetime.now(timezone.utc)
+            cross_doc["createdAt"] = datetime.now(dubai_tz)
+            cross_doc["updatedAt"] = datetime.now(dubai_tz)
             self.shared_list.append(cross_doc)
 
         logger.debug(f"Appended {len(crosses_list)} documents in Shared List .... ")
