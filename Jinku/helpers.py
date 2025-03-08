@@ -7,7 +7,10 @@ from common.config.jinku import JINKU_MAX_RETRIES, JINKU_COOKIE, JINKU_CSRF_TOKE
 from Jinku.constants import JINKU_BRANDS, JINKU_PAYLOAD, JINKU_CATALOG_URL, JINKU_HEADERS
 from common.db import jinku_models_collection
 
-from logger import logger
+from common.custom_logger import get_logger
+
+logger, listener = get_logger("Jinku Models Scraper")
+listener.start()
 
 
 class JinkuCrawler:

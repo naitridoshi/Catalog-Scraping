@@ -1,7 +1,10 @@
 import logging
+import os
 import queue
 import sys
-from logging.handlers import QueueListener
+from logging.handlers import QueueListener, RotatingFileHandler
+from os import makedirs
+from os.path import join
 from time import sleep
 
 from common.custom_logger.constants import LogColors
@@ -35,24 +38,43 @@ console_format = ColoredFormatter(
 )
 
 
+file_format=logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - message: %(message)s'
+)
+
 def get_logger(name: str = 'util'):
     logger = logging.getLogger(name)
     console_handler = logging.StreamHandler(sys.stdout)
+
+    handlers=[]
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(console_format)
 
-    # Remove all handlers associated with the logger
-    if logger.hasHandlers():
-        logger.handlers.clear()
+    handlers.append(console_handler)
+
+    base_dir=sys.path[1]
+    logger_path = os.path.join(base_dir,"logs")
+    makedirs(logger_path,exist_ok=True)
+
+    file_handler= RotatingFileHandler(
+        join(logger_path, "history.log"),
+        maxBytes=10*1024**2,
+        backupCount=5,
+        encoding="utf-8"
+    )
+
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(file_format)
+
+    handlers.append(file_handler)
 
     logger.setLevel(logging.DEBUG)
     log_queue = queue.Queue()
     queue_handler = logging.handlers.QueueHandler(log_queue)
     logger.addHandler(queue_handler)
 
-    # Use console_handler only in the listener
     listener = QueueListener(
-        log_queue, console_handler, respect_handler_level=True
+        log_queue, *handlers, respect_handler_level=True
     )
     return logger, listener
 

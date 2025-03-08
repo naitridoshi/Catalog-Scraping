@@ -1,6 +1,5 @@
 .idea/
 .venv/
 .env
-logs/
-jinku/files/
 *.json
+logs/
