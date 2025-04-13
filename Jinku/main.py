@@ -3,7 +3,7 @@ import time
 
 from Jinku.constants import JINKU_PRODUCT_URL, JINKU_PRODUCT_URL_PARAMS
 from common.custom_logger import get_logger
-from common.request_helper import RequestHelper
+from Jinku.request_helper import RequestHelper
 
 logger, listener = get_logger("Jinku Scraper")
 listener.start()
