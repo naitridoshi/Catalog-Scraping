@@ -8,6 +8,7 @@ import pytz
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+from itertools import product
 
 # from common.config import DATA_CENTER_PROXIES
 from common.constants import BASIC_HEADERS, BATCH_SIZE, MAX_PROCESSES
@@ -69,6 +70,8 @@ class RequestHelper:
     @staticmethod
     def parse_dlj_data(soup: BeautifulSoup):
         parsed_data = []
+        max_oem_count = 0
+
         try:
             table = soup.find('table')
             if not table:
@@ -85,19 +88,32 @@ class RequestHelper:
                 if count == 0:
                     continue  # skip header
 
-                # Extract text from each <td> individually
                 tds = [td.get_text(separator="\n", strip=True) for td in tr.find_all('td')]
-                parsed_data.append(tds)
+                if not tds:
+                    continue
 
-            logger.info(f"Successfully parsed {len(parsed_data)} records from the table.")
+                oem_numbers = tds[0].split("\n")
+                rest_of_data = tds[1:]
+
+                max_oem_count = max(max_oem_count, len(oem_numbers))
+                parsed_data.append((oem_numbers, rest_of_data))
+
+            # Normalize rows: pad OEMs so all rows align properly
+            final_data = []
+            for oems, rest in parsed_data:
+                padded_oems = oems + [''] * (max_oem_count - len(oems))
+                final_data.append(padded_oems + rest)
+
+            logger.info(f"Successfully parsed {len(final_data)} normalized records from the table.")
+
+            return final_data, max_oem_count
 
         except Exception as e:
             logger.error(f"Error occurred while parsing DLJ data: {str(e)}")
-
-        return parsed_data
+            return [], None
 
     @staticmethod
-    def save_to_excel(data_list, filename, url):
+    def save_to_excel(data_list, filename, url, max_oem_count):
         try:
             if not data_list:
                 logger.warning("No data to save. The list is empty.")
@@ -108,7 +124,8 @@ class RequestHelper:
                 os.makedirs(directory, exist_ok=True)
                 logger.info(f"Created directory: {directory}")
 
-            headers = ["OEM NO.", "CAR NAME", "PRODUCT", "YEAR", "POSITION", "PIC"]
+            headers = [f"OEM NO. {i + 1}" for i in range(max_oem_count)] + ["CAR NAME", "PRODUCT", "YEAR", "POSITION",
+                                                                            "PIC"]
             df = pd.DataFrame(data_list, columns=headers)
 
             sheet_name = f"DLJ-{str(url.split('=')[-1]).upper()[:25]}"
@@ -170,14 +187,17 @@ class RequestHelper:
             return self.parse_dlj_data(soup)
 
     def main(self, main_url,filename):
-        raw_data = self.get_data_from_url_using_soup(main_url)
-        self.save_to_excel(raw_data,filename,main_url)
+        raw_data, max_oem_count = self.get_data_from_url_using_soup(main_url)
+        if max_oem_count:
+            self.save_to_excel(raw_data,filename,main_url,max_oem_count)
+        else:
+            logger.error("Failed to save...")
 
     @staticmethod
     def clean_text_from_json(filename: str):
         try:
             with open(filename, 'r') as f:
-                data = json.load(f)
+                data = jso  n.load(f)
             for item in data:
                 item['data'] = re.sub(r'\s+', ' ', item['data'].strip())
             with open('data2.json', 'w') as f:
