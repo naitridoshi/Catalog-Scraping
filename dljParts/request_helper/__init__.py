@@ -197,7 +197,7 @@ class RequestHelper:
     def clean_text_from_json(filename: str):
         try:
             with open(filename, 'r') as f:
-                data = jso  n.load(f)
+                data = json.load(f)
             for item in data:
                 item['data'] = re.sub(r'\s+', ' ', item['data'].strip())
             with open('data2.json', 'w') as f:
