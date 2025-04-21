@@ -1,7 +1,3 @@
-import os
-import time
-
-from Jinku.constants import JINKU_PRODUCT_URL, JINKU_PRODUCT_URL_PARAMS
 from common.custom_logger import get_logger
 from dljParts.request_helper import RequestHelper
 from dljParts.constants import DLJ_SEARCH_URL
