@@ -114,6 +114,7 @@ class SbPartsRequestHelper:
 
     async def collect_all_part_numbers(self):
         logger.info("Starting collection of all part numbers.")
+        no_response_prefixes = []  # List to store prefixes with no response
         async with httpx.AsyncClient(timeout=10.0) as client:
             tasks = []
 
@@ -145,6 +146,7 @@ class SbPartsRequestHelper:
                             logger.error(f"Error processing response for {prefix}: {e}")
                     else:
                         logger.warning(f"No response received for prefix {prefix}.")
+                        no_response_prefixes.append(prefix)  # Store prefix with no response
 
                 tasks.append(fetch_and_store(prefix, payload))
                 logger.debug(f"Task appended for prefix: {prefix}. Current batch size: {len(tasks)}")
@@ -159,7 +161,13 @@ class SbPartsRequestHelper:
                 logger.info(f"Executing final batch of {len(tasks)} tasks.")
                 await asyncio.gather(*tasks)
                 logger.info("Final batch completed.")
-        logger.info("Completed collection of all part numbers.")
+
+        # Write no_response_prefixes to a file at the end
+        import os
+        os.makedirs('files', exist_ok=True)
+        with open('files/no_response_prefixes.json', 'w') as f:
+            json.dump(no_response_prefixes, f, indent=4)
+        logger.info(f"Completed collection of all part numbers. No response for {len(no_response_prefixes)} prefixes. Saved to files/no_response_prefixes.json.")
 
     @staticmethod
     def clean_text_from_json(filename: str):
