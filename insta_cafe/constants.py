@@ -1,5 +1,5 @@
 GOOGLE_GEMINI_EMAIL_PROMPT="""
-You are given the HTML source of a public Instagram profile page. 
+You are given the Instagram URL along with the HTML source of a public Instagram profile page. 
 Extract the following details from the HTML and provide them in a JSON object:
 
 - username: Instagram handle (e.g., @username)

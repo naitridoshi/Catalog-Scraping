@@ -118,8 +118,9 @@ def get_page_information(url: str, request_helper:InstaCafeRequestHelper) -> tup
         if res is None:
             return None
 
+        entire_response=url+res.text
         page_information, token_used = get_gemini_response(
-            html_content=res.text,
+            html_content=entire_response,
             clean_text=True,
             prompt=GOOGLE_GEMINI_EMAIL_PROMPT
         )
