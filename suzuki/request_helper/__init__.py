@@ -22,7 +22,7 @@ logger, listener = get_logger("SuzukiRequestHelper")
 listener.start()
 
 
-class RequestHelper:
+class SuzukiRequestHelper:
     BASIC_HEADERS.update({'content-type': 'application/json'})
     def __init__(self, proxies: dict = None, headers: dict = BASIC_HEADERS):
         self.proxies = proxies
