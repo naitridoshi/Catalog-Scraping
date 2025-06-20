@@ -32,17 +32,19 @@ if __name__ == '__main__':
 
         part_list = []
         while not completed:
-            res = scraper.get_filters_data(model_id=model_id, model_name=model_name)
+
+            logger.info(f"ID: {model_id} NAME: {model_name} PAGE: {completed_pages}")
+            res = scraper.get_filters_data(model_id=model_id, model_name=model_name, page=completed_pages)
             try:
                 if res:
                     logger.info(f"Response: {res}")
                     try:
-                        data = json.loads(res)
-                        total_pages = data.get("TotalPages")
+                        total_pages = res.get("TotalPages")
                         if total_pages > completed_pages:
-                            part_list.extend(data.get("PartList"))
+                            part_list.extend(res.get("PartList"))
                             completed_pages += 1
                         else:
+                            completed_pages = 0
                             completed = True
                     except Exception as e:
                         logger.info(f"Could not parse response: {res}")

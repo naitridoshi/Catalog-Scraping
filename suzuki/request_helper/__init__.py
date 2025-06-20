@@ -78,7 +78,7 @@ class SuzukiRequestHelper:
               "modelname": model_name,
               "modelid": model_id,
               "variant": [
-                {"variantname": "at", "variantid": "P:AT"}
+                {}
               ]
             }
           ],
