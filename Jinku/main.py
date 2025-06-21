@@ -3,7 +3,7 @@ import time
 
 from Jinku.constants import JINKU_PRODUCT_URL, JINKU_PRODUCT_URL_PARAMS
 from common.custom_logger import get_logger
-from Jinku.request_helper import RequestHelper
+from Jinku.request_helper import JinkuRequestHelper
 
 logger, listener = get_logger("Jinku Scraper")
 listener.start()
@@ -11,7 +11,7 @@ listener.start()
 
 
 if __name__ == '__main__':
-    request_helper = RequestHelper()
+    request_helper = JinkuRequestHelper()
 
     LETTER="a"  # ONLY CHANGE THIS. DO NOT CHANGE ANYTHING ELSE PLEASE
 
