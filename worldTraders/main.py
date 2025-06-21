@@ -13,7 +13,7 @@ if __name__ == '__main__':
     page=1
 
     for current_page in range(page, 49):
-        SEARCH_URL = f"{IPC_NET_SEARCH_URL}/{current_page}/"
+        SEARCH_URL = f"{IPC_NET_SEARCH_URL}/{current_page}/?pid=0&aid=0&cid=0"
         logger.info(f"Getting Data for query - {SEARCH_URL}")
         try:
             request_helper.main(SEARCH_URL,f"files/ipcNet/importers_and_exporters.xlsx")
