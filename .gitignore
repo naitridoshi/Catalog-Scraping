@@ -6,3 +6,4 @@ logs/
 files/*
 # But don't ignore the directory itself
 !files/.gitkeep
+*.pyc

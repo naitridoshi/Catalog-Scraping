@@ -1,9 +1,5 @@
-import os
-import time
-
-from Jinku.constants import JINKU_PRODUCT_URL, JINKU_PRODUCT_URL_PARAMS
 from common.custom_logger import get_logger
-from dljParts.request_helper import RequestHelper
+from dljParts.request_helper import DLJRequestHelper
 from dljParts.constants import DLJ_SEARCH_URL
 
 logger, listener = get_logger("DLJScraper")
@@ -12,7 +8,7 @@ listener.start()
 
 
 if __name__ == '__main__':
-    request_helper = RequestHelper()
+    request_helper = DLJRequestHelper()
 
     SEARCH_QUERY="SUZUKI"  # ONLY CHANGE THIS. DO NOT CHANGE ANYTHING ELSE PLEASE
 
