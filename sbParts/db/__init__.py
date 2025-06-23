@@ -3,7 +3,7 @@ from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from common.config import MONGO_URI, DATABASE_NAME
-from common.config.sbparts import SBPARTS_PARTS_COLLECTION
+from common.config.sbparts import SBPARTS_CATALOG_COLLECTION
 from common.custom_logger import get_logger
 
 logger, listener = get_logger("SbpartsDB")
@@ -14,6 +14,25 @@ class MongoWriter:
         self.client = AsyncIOMotorClient(mongo_uri)
         self.db = self.client[db_name]
         self.collection = self.db[collection_name]
+
+    def clean_mongo_data(self, data):
+        """
+        Clean MongoDB extended JSON format from data.
+        Removes _id fields with $oid values and other MongoDB-specific fields.
+        """
+        if isinstance(data, dict):
+            # Remove _id field if it exists (MongoDB will generate a new one)
+            if '_id' in data:
+                del data['_id']
+            
+            # Clean nested dictionaries
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    data[key] = self.clean_mongo_data(value)
+                elif isinstance(value, list):
+                    data[key] = [self.clean_mongo_data(item) if isinstance(item, dict) else item for item in value]
+        
+        return data
 
     async def save_response(self, data):
         """
@@ -26,6 +45,7 @@ class MongoWriter:
             if isinstance(data, list):
                 if data:
                     for doc in data:
+                        doc = self.clean_mongo_data(doc)
                         doc["createdAt"] = now
                         doc["updatedAt"] = now
                     await self.collection.insert_many(data)
@@ -33,6 +53,7 @@ class MongoWriter:
                 else:
                     logger.debug("Received empty list; nothing inserted.")
             elif isinstance(data, dict):
+                data = self.clean_mongo_data(data)
                 data["createdAt"] = now
                 data["updatedAt"] = now
                 await self.collection.insert_one(data)
@@ -44,4 +65,4 @@ class MongoWriter:
 
 
 
-mongo_writer=MongoWriter(mongo_uri=MONGO_URI, db_name=DATABASE_NAME, collection_name=SBPARTS_PARTS_COLLECTION)
+mongo_writer=MongoWriter(mongo_uri=MONGO_URI, db_name=DATABASE_NAME, collection_name=SBPARTS_CATALOG_COLLECTION)

@@ -13,4 +13,4 @@ if __name__ == '__main__':
         headers=HEADERS
     )
 
-    asyncio.run(scraper.collect_all_part_numbers())
+    asyncio.run(scraper.main(filename='autoSparePartsCatalog.sbparts_parts_data.json'))
