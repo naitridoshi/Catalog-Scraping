@@ -43,40 +43,35 @@ file_format = logging.Formatter(
 )
 
 
-def get_logger(name: str = 'util'):
+def get_logger(
+    name: str = "utils",
+    queue_logs: bool = True,
+):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-
-    # Create console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(console_format)
 
-    # Create log directory if it doesn't exist
-    base_dir = sys.path[1]
-    logger_path = os.path.join(base_dir, "logs")
-    makedirs(logger_path, exist_ok=True)
+    # Remove all handlers associated with the logger
+    if logger.hasHandlers():
+        logger.handlers.clear()
 
-    # Thread-safe rotating file handler
-    file_handler = ConcurrentRotatingFileHandler(
-        join(logger_path, "history.log"),
-        maxBytes=10 * 1024 ** 2,
-        backupCount=5,
-        encoding="utf-8"
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(file_format)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    if queue_logs:
+        log_queue = queue.Queue()  # type: ignore
+        queue_handler = logging.handlers.QueueHandler(log_queue)
+        logger.addHandler(queue_handler)
+        handlers = list()
+        handlers.append(console_handler)
 
-    # Create a queue and handlers
-    log_queue = queue.Queue()
-    queue_handler = QueueHandler(log_queue)
-    logger.addHandler(queue_handler)
+        # Use console_handler only in the listener
+        listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
+        return logger, listener
 
-    listener = QueueListener(
-        log_queue, console_handler, file_handler, respect_handler_level=True
-    )
+    logger.addHandler(console_handler)
+    return logger
 
-    return logger, listener
 
 
 if __name__ == '__main__':

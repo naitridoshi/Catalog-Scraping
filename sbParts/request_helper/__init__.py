@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup
 # from common.config import DATA_CENTER_PROXIES
 from common.constants import BASIC_HEADERS, BATCH_SIZE, MAX_PROCESSES
 from common.custom_logger import color_string, get_logger
-from sbParts.constants import GET_PART_NUMBER_URL
+from sbParts.constants import GET_PART_NUMBER_URL, CATALOG_PAGE_URL
 from sbParts.db import mongo_writer
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -72,7 +72,7 @@ class SbPartsRequestHelper:
         use_own_client = client is None
 
         if use_own_client:
-            client = httpx.AsyncClient(timeout=timeout, proxies=proxies, verify=False)
+            client = httpx.AsyncClient(timeout=timeout, proxy=proxies, verify=False)
 
         try:
             for try_request in range(1, 5):
@@ -182,13 +182,140 @@ class SbPartsRequestHelper:
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.error(f"Error processing file {filename}: {e}")
 
+    async def parse_catalog_page(self, part_no:str,pid: str, brand:str):
+        logger.info(f"Starting to parse catalog page for PID: {pid}, Part No: {part_no}, Brand: {brand}")
+        url = f"{CATALOG_PAGE_URL}{pid}"
+        logger.debug(f"Constructed URL: {url}")
+        
+        response = await self.request(url)
+        if response:
+            logger.info(f"Received response for PID {pid}, status: {response.status_code}")
+            logger.debug(f"Response content length: {len(response.text)} characters")
+            
+            soup = BeautifulSoup(response.text , 'html.parser')
+            logger.debug("BeautifulSoup object created successfully")
+            
+            # Add null checks for all elements
+            logger.debug("Looking for product header (h4 with class 'productHeader')")
+            title_elem = soup.find('h4', class_='productHeader')
+            if not title_elem:
+                logger.error(f"Could not find product header for PID: {pid}")
+                return []
+            title = title_elem.get_text().strip().split('\n')[0].strip()
+            logger.info(f"Found product title: '{title}'")
+            
+            logger.debug("Looking for product image (a tag with data-lightbox='product-image-set')")
+            img_title=title.split('|')[-1]
+            logger.info(f"Found product image title: {img_title}")
+            img_elem = soup.find('a', attrs={'title':img_title.strip()})
+            
+            img_url = img_elem.get('href') if img_elem else None
+            logger.info(f"Found product image URL: {img_url}")
+            
+            logger.debug("Looking for specifications div (div with class 'productspec')")
+            specifications_div = soup.find('div', class_='productspec')
+            specifications = {}
+            if specifications_div:
+                logger.debug("Found specifications div, looking for table")
+                specifications_table = specifications_div.find('table',class_='table table-bordered table-striped marginbtnless')
+                if specifications_table:
+                    logger.debug("Found specifications table, processing rows")
+                    specifications_rows = specifications_table.find_all('tr')
+                    logger.info(f"Found {len(specifications_rows)} specification rows")
+                    for count, row in enumerate(specifications_rows):
+                            logger.debug(f"Processing specification row {count + 1}")
+                            key_elem = row.find_all('td')[0]
+                            value_elem = row.find_all('td')[-1]
+                            if key_elem.get_text().strip() == 'Part Number':
+                                continue
+                            if key_elem and value_elem:
+                                key = key_elem.get_text().strip()
+                                value = value_elem.get_text().strip()
+                                specifications[key] = value
+                                logger.debug(f"Added specification: {key} = {value}")
+                            else:
+                                logger.warning(f"Row {count + 1}: Missing key or value element")
+                    else:
+                        logger.warning("tbody not found in specifications table")
+                else:
+                    logger.warning("Specifications table not found")
+            else:
+                logger.warning("Specifications div not found")
+            
+            logger.info(f"Collected {len(specifications)} specifications")
+            
+            logger.debug("Looking for cross-reference divs (div with class 'productapp')")
+            cross_divs = soup.find_all('div', class_='productapp')
+            logger.info(f"Found {len(cross_divs)} cross-reference divs")
+            crosses = []
+            for div_index, cross_div in enumerate(cross_divs):
+                logger.debug(f"Processing cross-reference div {div_index + 1}")
+                cross_table = cross_div.find('table')
+                if cross_table:
+                    logger.debug(f"Found table in cross-reference div {div_index + 1}")
+                    cross_table_rows = cross_table.find_all('tr')
+                    logger.debug(f"Found {len(cross_table_rows)} rows in cross-reference table {div_index + 1}")
+                    for row_index, row in enumerate(cross_table_rows):
+                        logger.debug(f"Processing cross-reference row {row_index + 1} in div {div_index + 1}")
+                        tds = row.find_all('td')
+                        if len(tds) >= 2:
+                            key = tds[0].get_text().strip()
+                            value = tds[-1].get_text().strip()
+                            crosses.append({'Owner': key, 'Number': value})
+                            logger.debug(f"Added cross-reference: {key} = {value}")
+                        else:
+                            logger.warning(f"Cross-reference row {row_index + 1} in div {div_index + 1}: Insufficient columns ({len(tds)})")
+                else:
+                    logger.warning(f"Cross-reference table not found in div {div_index + 1}")
+            
+            logger.info(f"Collected {len(crosses)} cross-references")
+            
+            all_docs = []
+            logger.debug("Creating final documents")
+            for cross_index, cross in enumerate(crosses):
+                doc = {
+                    'product_name': title,
+                    'product_image': img_url,
+                    'specifications': specifications,
+                    'pid': pid,
+                    'p_brand': brand,
+                    'Owner': cross['Owner'],
+                    'Number': cross['Number']
+                }
+                all_docs.append(doc)
+                logger.debug(f"Created document {cross_index + 1}: Owner={cross['Owner']}, Number={cross['Number']}")
+
+            logger.info(f"Successfully parsed catalog page for PID {pid}. Created {len(all_docs)} documents")
+            return all_docs
+        else:
+            logger.error(f"No response received for PID: {pid}")
+            return []
+
+    async def read_from_file(self, filename: str):
+        logger.info(f"Reading from file: {filename}")
+        with open(filename, 'r') as f:
+            data = json.load(f)
+        return data
+
+    async def main(self, filename: str):
+        data = await self.read_from_file(filename)
+        for count, item in enumerate(data):
+            logger.info(f"Processing item {count + 1} of {len(data)}")
+            all_docs=await self.parse_catalog_page(pid=item['pid'], part_no=item['part_no'], brand=item['p_brand'])
+            logger.info(f"Processed item {count + 1} of {len(data)}")
+
+            if all_docs:
+                logger.info(f"Saving {len(all_docs)} documents for item {count + 1} of {len(data)}")
+                await mongo_writer.save_response(all_docs)
+                logger.info(f"Saved item {count + 1} of {len(data)}")
+            else:
+                logger.warning(f"No documents found for item {count + 1} of {len(data)}")
+            break
 
 if __name__ == '__main__':
     scraper = SbPartsRequestHelper(
         # proxies=DATA_CENTER_PROXIES,
         headers={}
     )
-    _url = 'https://www.cp.pt/passageiros/en/how-to-travel/Useful-information'
-    res = scraper.request('https://www.ifconfig.me/all.json')
-    print(res.json())
-    print(res.status_code)
+    res=asyncio.run(scraper.parse_catalog_page(pid='241245', part_no='0046455892', brand='ALFA ROMEO'))
+    print(json.dumps(res, indent=4))

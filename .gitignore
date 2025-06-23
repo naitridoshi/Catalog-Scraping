@@ -1,7 +1,6 @@
 .idea/
 .venv/
 .env
-*.json
 logs/
 files/*
 # But don't ignore the directory itself

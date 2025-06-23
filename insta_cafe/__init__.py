@@ -97,8 +97,9 @@ def get_links_from_google_search(
     """
     links = []
     try:
-        response = search(term=query, num_results=num_results)
+        response = search(term=query, num_results=2)
         for link in response:
+            logger.debug(f"LINK IS {link}")
             if link.startswith("http"):
                 links.append(link)
     except Exception as e:
@@ -114,12 +115,14 @@ def get_page_information(url: str, request_helper:InstaCafeRequestHelper) -> tup
     page_information = None
     logger.debug(f"Processing: {url}")
     try:
-        res = request_helper.request(method="GET", url=url)
-        if res is None:
-            return None
+        # res = request_helper.request(method="GET", url=url)
+        # if res is None:
+        #     return None
 
+        entire_response=url
         page_information, token_used = get_gemini_response(
-            html_content=res.text,
+            # html_content=entire_response,
+            contents=[entire_response],
             clean_text=True,
             prompt=GOOGLE_GEMINI_EMAIL_PROMPT
         )
