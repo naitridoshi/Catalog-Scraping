@@ -22,7 +22,7 @@ logger, listener = get_logger("SuzukiRequestHelper")
 listener.start()
 
 
-class RequestHelper:
+class SuzukiRequestHelper:
     BASIC_HEADERS.update({'content-type': 'application/json'})
     def __init__(self, proxies: dict = None, headers: dict = BASIC_HEADERS):
         self.proxies = proxies
@@ -89,6 +89,48 @@ class RequestHelper:
 
         response=self.request(url="https://www.marutisuzuki.com/api/sitecore/MSGPAJAX/GetFilter", method="POST", json=payload)
         if response:
+            try:
+                return response.json()
+            except Exception as e:
+                logger.warning(f"could not return json response - error: {e} - returning text response")
+                return response.text
+
+
+    def get_variants_by_model(self, model_id:str):
+        logger.info(f"Getting filters data for {model_id} ")
+        response=self.request(url=f"https://www.marutisuzuki.com/api/sitecore/msgpajax/getvariantbymodel?modelcode={model_id}")
+        if response:
+            try:
+                return response.json()
+            except exception as e:
+                logger.warning(f"could not return json response - error: {e} - returning text response")
+                return response.text
+
+
+    def get_filters_per_variant(self, model_name,model_id, variant_id, page=1):
+        logger.info(f"Getting filters data for {model_name} {model_id} {variant_id} {page}")
+        payload = {
+            "category": [],
+            "model": [
+                {
+                    "modelname": model_name,
+                    "modelid": model_id,
+                    "variant": [
+                        {"variantname": variant_id.lower(), "variantid": f"{model_id}:{variant_id}"}
+                    ]
+                }
+            ],
+            "sortingFilter": "By Relevence",
+            "pageNumber": page,
+            "query": ""
+        }
+
+        response = self.request(url="https://www.marutisuzuki.com/api/sitecore/MSGPAJAX/GetFilter", method="POST",
+                                json=payload)
+        try:
+            return response.json()
+        except Exception as e:
+            logger.warning(f"could not return json response - error: {e} - returning text response")
             return response.text
 
 
@@ -112,7 +154,7 @@ if __name__ == '__main__':
         "cookie": "marutisuzuki#lang=en"
     }
 
-    scraper = RequestHelper(
+    scraper = SuzukiRequestHelper(
         headers=headers
     )
 
