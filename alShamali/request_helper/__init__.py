@@ -8,9 +8,10 @@ import time
 import csv
 import os
 import uuid
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 from datetime import datetime, timezone
-from typing import Optional, Union
+from typing import Optional, Union, List, Dict
 
 import httpx
 import psutil
@@ -19,7 +20,7 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 
-from alShamali.constants import FIRST_PAGE_URL, HEADERS
+from alShamali.constants import HEADERS
 from common.constants import BASIC_HEADERS
 from common.custom_logger import color_string, get_logger
 
@@ -36,6 +37,130 @@ class AlShamaliRequestHelper:
         self.shared_list = []
         self.max_concurrent_requests = max_concurrent_requests
         logger.info(f"Initialized AlShamaliRequestHelper with max_concurrent_requests={max_concurrent_requests}")
+
+    def save_to_csv(self, data: List[Dict], filename: str, title: str = None) -> str:
+        """
+        Save scraped data to CSV file with parsed price data
+        
+        Args:
+            data: List of dictionaries containing scraped data
+            filename: Name of the CSV file
+            title: Title/category name to add as a column
+            
+        Returns:
+            str: Path to the saved CSV file
+        """
+        if not data:
+            logger.warning(f"No data to save for {filename}")
+            return None
+            
+        # Create files directory if it doesn't exist
+        os.makedirs('files/alShamali', exist_ok=True)
+        
+        csv_path = f'files/alShamali/{filename}.csv'
+        
+        try:
+            # Process price data before saving
+            processed_data = []
+            for item in data:
+                processed_item = item.copy()
+                
+                # Parse price data if Price field exists
+                if 'Price' in processed_item and processed_item['Price']:
+                    price_data = self.parse_price_data(processed_item['Price'])
+                    processed_item['Price_AED'] = price_data['AED']
+                    processed_item['Price_USD'] = price_data['USD']
+                    processed_item['Price_Original'] = processed_item['Price']
+                
+                # Add title/category column if provided
+                if title:
+                    processed_item['Category'] = title
+                
+                processed_data.append(processed_item)
+            
+            # Get all unique field names from all records
+            fieldnames = set()
+            for item in processed_data:
+                fieldnames.update(item.keys())
+            fieldnames = sorted(list(fieldnames))
+            
+            with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(processed_data)
+                
+            logger.info(f"Successfully saved {len(processed_data)} records to {csv_path}")
+            return csv_path
+            
+        except Exception as e:
+            logger.error(f"Error saving CSV file {csv_path}: {str(e)}")
+            return None
+
+    def parse_price_data(self, price_str):
+        """
+        Parse price data that contains both AED and USD values
+        Example: "AED 97.97\n(26.68 $)" -> {"AED": "97.97", "USD": "26.68"}
+        """
+        if not price_str or pd.isna(price_str):
+            return {"AED": "", "USD": ""}
+        
+        price_str = str(price_str).strip()
+        
+        # Extract AED value
+        import re
+        aed_match = re.search(r'AED\s*([\d,]+\.?\d*)', price_str)
+        aed_value = aed_match.group(1) if aed_match else ""
+        
+        # Extract USD value
+        usd_match = re.search(r'\(([\d,]+\.?\d*)\s*\$\)', price_str)
+        usd_value = usd_match.group(1) if usd_match else ""
+        
+        return {"AED": aed_value, "USD": usd_value}
+
+    def save_to_json(self, data: List[Dict], filename: str) -> str:
+        """
+        Save scraped data to JSON file with parsed price data
+        
+        Args:
+            data: List of dictionaries containing scraped data
+            filename: Name of the JSON file
+            
+        Returns:
+            str: Path to the saved JSON file
+        """
+        if not data:
+            logger.warning(f"No data to save for {filename}")
+            return None
+            
+        # Create files directory if it doesn't exist
+        os.makedirs('files/alShamali', exist_ok=True)
+        
+        json_path = f'files/alShamali/{filename}.json'
+        
+        try:
+            # Process price data before saving
+            processed_data = []
+            for item in data:
+                processed_item = item.copy()
+                
+                # Parse price data if Price field exists
+                if 'Price' in processed_item and processed_item['Price']:
+                    price_data = self.parse_price_data(processed_item['Price'])
+                    processed_item['Price_AED'] = price_data['AED']
+                    processed_item['Price_USD'] = price_data['USD']
+                    processed_item['Price_Original'] = processed_item['Price']
+                
+                processed_data.append(processed_item)
+            
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(processed_data, f, indent=4, ensure_ascii=False)
+                
+            logger.info(f"Successfully saved {len(processed_data)} records to {json_path}")
+            return json_path
+            
+        except Exception as e:
+            logger.error(f"Error saving JSON file {json_path}: {str(e)}")
+            return None
 
     async def request(
             self,
@@ -65,7 +190,7 @@ class AlShamaliRequestHelper:
                     
                     # Add delay between retry attempts to avoid overwhelming the server
                     if try_request > 1:
-                        delay = try_request * 2  # Progressive delay: 2s, 4s, 6s
+                        delay = try_request * 3  # Increased progressive delay: 3s, 6s, 9s
                         logger.debug(f"Waiting {delay} seconds before retry {try_request}")
                         await asyncio.sleep(delay)
                     
@@ -131,6 +256,11 @@ class AlShamaliRequestHelper:
     async def get_all_pages_urls(self, url):
         logger.info(f"Getting all pages urls for {url} ...") 
         
+        # Add initial delay before first request to avoid cookie-based blocking
+        initial_delay = random.uniform(3, 7)  # Random delay between 3-7 seconds
+        logger.debug(f"Initial delay: Waiting {initial_delay:.2f} seconds before first request...")
+        await asyncio.sleep(initial_delay)
+        
         # First, get the initial page to determine pagination
         logger.debug("Fetching initial page to determine pagination...")
         initial_response = await self.request(url)
@@ -159,7 +289,7 @@ class AlShamaliRequestHelper:
         
         try:
             # Add random delay before each request to avoid cookie-based blocking
-            delay = random.uniform(1.5, 3.5)  # Random delay between 1.5-3.5 seconds
+            delay = random.uniform(2.0, 5.0)  # Increased random delay between 2.0-5.0 seconds
             logger.debug(f"Waiting {delay:.2f} seconds before requesting {url}")
             await asyncio.sleep(delay)
             
@@ -216,12 +346,12 @@ class AlShamaliRequestHelper:
             logger.error(f"Error parsing page {url}: {str(e)}")
             return []
 
-    async def parse_response(self):
-        logger.info("Starting async parsing process...")
+    async def parse_response(self, url, title=None, image=None):
+        logger.info(f"Starting async parsing process for: {title or url}")
         start_time = time.time()
         
         # Get all page URLs
-        all_pages_urls = await self.get_all_pages_urls(FIRST_PAGE_URL)
+        all_pages_urls = await self.get_all_pages_urls(url)
         logger.info(f"Total pages to process: {len(all_pages_urls)}")
         
         if not all_pages_urls:
@@ -250,12 +380,20 @@ class AlShamaliRequestHelper:
                     if isinstance(result, Exception):
                         logger.error(f"Exception in batch {i//batch_size + 1}, page {j + 1}: {result}")
                     else:
+                        # Add metadata to each product
+                        for product in result:
+                            if title:
+                                product['Category'] = title
+                            if image:
+                                product['Category_Image'] = image
+                            product['Source_URL'] = url
+                        
                         all_products_data.extend(result)
                         logger.debug(f"Added {len(result)} products from batch {i//batch_size + 1}, page {j + 1}")
                 
                 # Longer delay between batches to avoid cookie-based blocking
                 if i + batch_size < len(all_pages_urls):
-                    batch_delay = random.uniform(3, 6)  # Random delay between 3-6 seconds
+                    batch_delay = random.uniform(5, 10)  # Increased random delay between 5-10 seconds
                     logger.info(f"Completed batch {i//batch_size + 1}. Waiting {batch_delay:.2f} seconds before next batch...")
                     await asyncio.sleep(batch_delay)
         
@@ -267,29 +405,5 @@ class AlShamaliRequestHelper:
 
 
 if __name__ == '__main__':
-    logger.info("Starting AlShamali scraper...")
-    scraper = AlShamaliRequestHelper(headers=HEADERS, max_concurrent_requests=5)
-    
-    try:
-        result = asyncio.run(scraper.parse_response())
-        
-        # Save results
-        with open('alShamali/NPR_result.json', 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=4, ensure_ascii=False)
-        
-        logger.info(f"Successfully saved {len(result)} products to NPR_result.json")
-        
-        # Also save as CSV for easier analysis
-        if result:
-            csv_filename = 'alShamali/NPR_result.csv'
-            with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
-                if result:
-                    fieldnames = result[0].keys()
-                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                    writer.writeheader()
-                    writer.writerows(result)
-            logger.info(f"Also saved results to {csv_filename}")
-            
-    except Exception as e:
-        logger.error(f"Error in main execution: {str(e)}")
-        raise
+    logger.info("This module should be run from alShamali/main.py")
+    logger.info("Please run: python alShamali/main.py")
