@@ -24,62 +24,31 @@ class RequestHelper:
         self.proxies = proxies
         self.headers = headers
 
-    def request(self, url: str, method: str = 'GET', timeout: int = 10,
-                params: dict = None, json: dict | list = None,
-                headers: dict = None, payload=None):
+    def request(self, url: str, method: str = 'GET', timeout: int = 10, params: dict = None, json: dict | list = None,
+                data: str | None = None, headers: dict = None):
         logger.debug(f"Requesting {url} ...")
-        use_session = self.is_session
-
-        # Choose the correct method
-        if use_session:
-            logger.info("Using sessions Request .... ")
-            if method.upper() == 'GET':
-                request_method = self.session.get
-            elif method.upper() == 'POST':
-                request_method = self.session.post
-            elif method.upper() == 'PUT':
-                request_method = self.session.put
-            elif method.upper() == 'PATCH':
-                request_method = self.session.patch
-            elif method.upper() == 'DELETE':
-                request_method = self.session.delete
-            else:
-                request_method = lambda *args, **kwargs: self.session.request(method=method, *args, **kwargs)
-        else:
-            request_method = requests.request
-            if headers is None:
-                headers = self.headers
-
         for try_request in range(1, 5):
             start_time = time.time()
             try:
-                kwargs = {
-                    "url": url,
-                    "params": params,
-                    "proxies": self.proxies,
-                    "timeout": timeout,
-                    "verify": True,
-                    "stream": False
-                }
-
-                if method.upper() in ('POST', 'PUT', 'PATCH'):
-                    if payload:
-                        kwargs["data"] = payload
-                    elif json:
-                        kwargs["json"] = json
-
-                # Always set headers if provided, even for session
-                if headers:
-                    kwargs["headers"] = headers
-
-                response = request_method(**kwargs)
-
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=json,
+                    data=data,
+                    headers=self.headers if headers is None else headers,
+                    proxies=self.proxies,
+                    verify=False,
+                    timeout=timeout,
+                    stream=True
+                )
                 time_taken = f'{time.time() - start_time:.2f} seconds'
                 if response.status_code == 200:
                     logger.debug(
                         f'Try: {try_request}, '
                         f'Status Code: {response.status_code}, '
-                        f'Response Length: {len(response.text) / 1024 / 1024:.2f} MB, '
+                        f'Response Length: '
+                        f'{len(response.text) / 1024 / 1024:.2f} MB, '
                         f'Time Taken: {color_string(time_taken)}.'
                     )
                     return response
@@ -92,10 +61,9 @@ class RequestHelper:
             except Exception as err:
                 logger.error(
                     f'ERROR OCCURRED - {try_request}: Time Taken '
-                    f"{color_string(f'{time.time() - start_time:.2f} seconds')}, "
-                    f"Error: {repr(err)}"
+                    f"{color_string(f'{time.time() - start_time:.2f} seconds')}"
+                    f', Error: {err}'
                 )
-            time.sleep(1)  # Add delay between retries
 
     def get_list_of_urls(self, url: str):
         response = self.request(url)

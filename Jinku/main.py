@@ -13,7 +13,7 @@ listener.start()
 if __name__ == '__main__':
     request_helper = JinkuRequestHelper()
 
-    LETTER="a"  # ONLY CHANGE THIS. DO NOT CHANGE ANYTHING ELSE PLEASE
+    LETTER="40"  # ONLY CHANGE THIS. DO NOT CHANGE ANYTHING ELSE PLEASE
 
     logger.info(f"Getting Data for code - {LETTER}")
     main_url = f"{JINKU_PRODUCT_URL}?product_id={LETTER}"
