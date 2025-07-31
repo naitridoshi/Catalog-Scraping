@@ -6,3 +6,11 @@ files/*
 # But don't ignore the directory itself
 !files/.gitkeep
 *.pyc
+
+OCR/output/*
+OCR/documents/*
+OCR/handwritten_documents/*
+
+!OCR/output/.gitkeep
+!OCR/documents/.gitkeep
+!OCR/handwritten_documents/.gitkeep
