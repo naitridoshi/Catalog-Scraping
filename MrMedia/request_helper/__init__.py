@@ -21,6 +21,7 @@ import urllib3
 from bs4 import BeautifulSoup
 from httpx import Response
 
+from MrMedia.constants import MRMEDIA_HEADERS, CATEGORY_URL
 from common.constants import BASIC_HEADERS
 from common.custom_logger import color_string, get_logger
 
@@ -38,7 +39,8 @@ class MrMediaRequestHelper:
         self.max_concurrent_requests = max_concurrent_requests
         logger.info(f"Initialized MrMediaRequestHelper with max_concurrent_requests={max_concurrent_requests}")
 
-    def get_list_of_urls(self, response:Response):
+    @staticmethod
+    def get_list_of_urls(response:Response):
         soup = BeautifulSoup(response.text, 'html.parser')
         categories_class = soup.find("div", class_="containe")
 
@@ -49,120 +51,28 @@ class MrMediaRequestHelper:
 
         return category_links
 
-    def save_to_csv(self, data: List[Dict], filename: str, title: str = None) -> str:
-        """
-        Save scraped data to CSV file with parsed price data
-
-        Args:
-            data: List of dictionaries containing scraped data
-            filename: Name of the CSV file
-            title: Title/category name to add as a column
-
-        Returns:
-            str: Path to the saved CSV file
-        """
-        if not data:
-            logger.warning(f"No data to save for {filename}")
-            return None
-
-        # Create files directory if it doesn't exist
-        os.makedirs('files/alShamali', exist_ok=True)
-
-        csv_path = f'files/alShamali/{filename}.csv'
-
-        try:
-            # Process price data before saving
-            processed_data = []
-            for item in data:
-                processed_item = item.copy()
-
-                # Parse price data if Price field exists
-                if 'Price' in processed_item and processed_item['Price']:
-                    price_data = self.parse_price_data(processed_item['Price'])
-                    processed_item['Price_AED'] = price_data['AED']
-                    processed_item['Price_USD'] = price_data['USD']
-                    processed_item['Price_Original'] = processed_item['Price']
-
-                # Add title/category column if provided
-                if title:
-                    processed_item['Category'] = title
-
-                processed_data.append(processed_item)
-
-            # Get all unique field names from all records
-            fieldnames = set()
-            for item in processed_data:
-                fieldnames.update(item.keys())
-            fieldnames = sorted(list(fieldnames))
-
-            with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(processed_data)
-
-            logger.info(f"Successfully saved {len(processed_data)} records to {csv_path}")
-            return csv_path
-
-        except Exception as e:
-            logger.error(f"Error saving CSV file {csv_path}: {str(e)}")
-            return None
-
-    def parse_category_page(self, response):
-        soup=BeautifulSoup(response, 'html.parser')
+    def parse_category_page(self, response:Response):
+        soup=BeautifulSoup(response.text, 'html.parser')
         all_items=soup.find('div', class_='container py-5').find('div', class_='row').find_all('div', class_='col-lg-4')
         for item in all_items:
             item_data = {}
             details=item.find("div", class_="work__item").find_all("li", class_="list-group-item float-left")
-            for detail in details:
-                detail_text = detail.text.strip()
+            for count,detail in enumerate(details):
+                if count == 0:
+                    item_data['Title'] = detail.text.strip()
+                else:
+                    if ":" in detail.text:
+                        detail_text = detail.text.strip().split(":", 1)
+                        if len(detail_text) == 2:
+                            key = detail_text[0].strip()
+                            value = detail_text[1].strip()
+                            item_data[key] = value
+                        else:
+                            item_data[f'Detail_{str(uuid)[:3]}'] = detail_text[0].strip()
+
+            logger.debug(f"Parsed item data: {item_data}")
 
             self.shared_list.append(item_data)
-
-
-    def save_to_json(self, data: List[Dict], filename: str) -> str:
-        """
-        Save scraped data to JSON file with parsed price data
-
-        Args:
-            data: List of dictionaries containing scraped data
-            filename: Name of the JSON file
-
-        Returns:
-            str: Path to the saved JSON file
-        """
-        if not data:
-            logger.warning(f"No data to save for {filename}")
-            return None
-
-        # Create files directory if it doesn't exist
-        os.makedirs('files/alShamali', exist_ok=True)
-
-        json_path = f'files/alShamali/{filename}.json'
-
-        try:
-            # Process price data before saving
-            processed_data = []
-            for item in data:
-                processed_item = item.copy()
-
-                # Parse price data if Price field exists
-                if 'Price' in processed_item and processed_item['Price']:
-                    price_data = self.parse_price_data(processed_item['Price'])
-                    processed_item['Price_AED'] = price_data['AED']
-                    processed_item['Price_USD'] = price_data['USD']
-                    processed_item['Price_Original'] = processed_item['Price']
-
-                processed_data.append(processed_item)
-
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(processed_data, f, indent=4, ensure_ascii=False)
-
-            logger.info(f"Successfully saved {len(processed_data)} records to {json_path}")
-            return json_path
-
-        except Exception as e:
-            logger.error(f"Error saving JSON file {json_path}: {str(e)}")
-            return None
 
     async def request(
             self,
@@ -221,8 +131,8 @@ class MrMediaRequestHelper:
                 except Exception as err:
                     logger.error(
                         f'ERROR OCCURRED - {try_request}: Time Taken '
-                        f"PAYLOAD - {json} "
                         f"{color_string(f'{time.time() - start_time:.2f} seconds')}, Error: {err}"
+                        f"PAYLOAD - {json} "
                     )
         finally:
             if use_own_client:
@@ -231,183 +141,138 @@ class MrMediaRequestHelper:
         logger.error(f"All retry attempts failed for URL: {url}")
         return None
 
-    async def get_last_page_url(self, soup):
-        logger.debug(f"Getting last page url from soup...")
-        pagination_div = soup.find('div', class_='tyresPaginator')
-        if pagination_div:
-            logger.debug("Found pagination div")
-            pagination_class = pagination_div.find('ul', class_='fr-pagination')
-            if pagination_class:
-                logger.debug("Found pagination class")
-                last_page_url = pagination_class.find('li', class_='last')
-                if last_page_url:
-                    logger.debug(f"Found last page url: {last_page_url}")
-                    last_page_number = int(last_page_url.find('a').get('href').split('start=')[1])
-                    logger.info(f"Found last page number: {last_page_number}")
-                    return last_page_number
-                else:
-                    logger.error("Not Found last page element in pagination")
-                    return None
-            else:
-                logger.error("Not Found pagination class")
-                return None
-        else:
-            logger.error("Not Found pagination div")
+    def save_to_csv(self, data: list, filename: str):
+        if not data:
+            logger.warning(f"No data to save for {filename}")
+            return
+        os.makedirs("files/mrMedia", exist_ok=True)
+        csv_path = f"files/mrMedia/{filename}.csv"
+        keys = set().union(*(d.keys() for d in data))
+        with open(csv_path, "w", newline="", encoding="utf-8") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=list(keys))
+            writer.writeheader()
+            writer.writerows(data)
+        logger.info(f"Data saved to {csv_path}")
+
+    def save_to_json(self, data: list, filename: str):
+        if not data:
+            logger.warning(f"No data to save for {filename}")
+            return
+        os.makedirs("files/mrMedia/json", exist_ok=True)
+        json_path = f"files/mrMedia/json/{filename}.json"
+        with open(json_path, "w", encoding="utf-8") as jsonfile:
+            json.dump(data, jsonfile, ensure_ascii=False, indent=2)
+        logger.info(f"Backup JSON saved to {json_path}")
+
+    def get_csv_content_as_string(self, data: list):
+        if not data:
+            return ""
+        
+        import io
+        keys = set().union(*(d.keys() for d in data))
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=list(keys))
+        writer.writeheader()
+        writer.writerows(data)
+        return output.getvalue()
+
+    async def main(self, url):
+        import asyncio
+        from functools import partial
+
+        response = await self.request(
+            url=url,
+            method='GET',
+            timeout=10,
+            headers=self.headers,
+            client=httpx.AsyncClient()
+        )
+        if not response:
+            logger.error(f"Failed to get a valid response for URL: {url}")
             return None
 
-    async def get_all_pages_urls(self, url):
-        logger.info(f"Getting all pages urls for {url} ...")
+        all_categories = self.get_list_of_urls(response)
+        if not all_categories:
+            logger.warning(f"No categories found in response for URL: {url}")
+            return None
+        else:
+            logger.info(f"Found {len(all_categories)} categories in response for URL: {url}")
 
-        # Add initial delay before first request to avoid cookie-based blocking
-        initial_delay = random.uniform(3, 7)  # Random delay between 3-7 seconds
-        logger.debug(f"Initial delay: Waiting {initial_delay:.2f} seconds before first request...")
-        await asyncio.sleep(initial_delay)
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
 
-        # First, get the initial page to determine pagination
-        logger.debug("Fetching initial page to determine pagination...")
-        initial_response = await self.request(url)
-        if not initial_response:
-            logger.error("Failed to fetch initial page")
+        async def process_category(category):
+            category_url = category.get('href')
+            if not category_url:
+                logger.warning(f"Category link is empty for URL: {url}")
+                return
+
+            if not category_url.startswith('http'):
+                category_url = f"{url.rstrip('/allcategories.php/')}/{category_url.lstrip('/')}"
+
+            logger.info(f"Processing category URL: {category_url}")
+            async with semaphore:
+                category_response = await self.request(
+                    url=category_url,
+                    method='GET',
+                    timeout=10,
+                    headers=self.headers,
+                    client=httpx.AsyncClient()
+                )
+            if not category_response:
+                logger.error(f"Failed to get a valid response for category URL: {category_url}")
+                return
+
+            # Parse and save in a thread to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            def parse_and_save():
+                    self.parse_category_page(category_response)
+                    os.makedirs("files/mrMedia", exist_ok=True)
+                    csv_path = f"files/mrMedia/category_{category.text}.csv"
+                    self.save_to_csv(self.shared_list, filename=f"category_{category.text}")
+                    self.save_to_json(self.shared_list, filename=f"category_{category.text}")
+                    logger.info(f"Saved category data to {csv_path} and backup to files/mrMedia/json/category_{category.text}.json")
+
+            await loop.run_in_executor(None, parse_and_save)
+
+        tasks = [process_category(category) for category in all_categories]
+        await asyncio.gather(*tasks)
+
+    async def get_all_category_links(self):
+        response = await self.request(url=CATEGORY_URL, method='GET', headers=self.headers)
+        if response:
+            links_with_headers = []
+            logger.info(f"Response received for URL: {CATEGORY_URL}")
+            links = self.get_list_of_urls(response)
+            logger.info(f"Total Links found: {len(links)}")
+            for link in links:
+                links_with_headers.append({"name": link.text, "link": link.get('href')})
+            return links_with_headers
+        return []
+
+    async def get_category_page(self, category_url: str) -> list:
+        """Parses a single category page and returns a list of item dicts."""
+        self.shared_list = []  # Clear previous data
+        
+        # Construct full URL if needed
+        if not category_url.startswith('http'):
+            base_url = CATEGORY_URL.split('/allcategories.php')[0]
+            category_url = f"{base_url}/{category_url.lstrip('/')}"
+
+        response = await self.request(url=category_url, method='GET', headers=self.headers)
+        if response:
+            logger.info(f"Response received for URL: {category_url}")
+            self.parse_category_page(response)
+            logger.info(f"Successfully parsed {len(self.shared_list)} items from {category_url}")
+            return self.shared_list
+        else:
+            logger.error(f"Failed to get response for {category_url}")
             return []
 
-        soup = BeautifulSoup(initial_response.text, 'html.parser')
-        last_page_number = await self.get_last_page_url(soup)
-
-        if last_page_number is None:
-            logger.error("Could not determine last page number")
-            return [url]
-
-        all_pages_urls = []
-        for page in range(0, last_page_number + 1, 20):
-            page_url = f"{url}&start={page}"
-            all_pages_urls.append(page_url)
-
-        logger.info(f"Generated {len(all_pages_urls)} page URLs")
-        return all_pages_urls
-
-    async def parse_single_page(self, url: str, client: httpx.AsyncClient) -> list:
-        """Parse a single page and return product data"""
-        logger.debug(f"Parsing single page: {url}")
-
-        try:
-            # Add random delay before each request to avoid cookie-based blocking
-            delay = random.uniform(2.0, 5.0)  # Increased random delay between 2.0-5.0 seconds
-            logger.debug(f"Waiting {delay:.2f} seconds before requesting {url}")
-            await asyncio.sleep(delay)
-
-            response = await self.request(url, client=client)
-            if not response:
-                logger.error(f"Failed to get response for {url}")
-                return []
-
-            soup = BeautifulSoup(response.text, 'html.parser')
-            main_products_div = soup.find('div', class_='goodsBody')
-
-            if main_products_div:
-                logger.debug(f"Found main products div for {url}")
-            else:
-                logger.warning(f"Not Found main products div for {url}, using original soup")
-                main_products_div = soup
-
-            products_table = main_products_div.find('div', class_='fr-table-responsive')
-            if not products_table:
-                logger.warning(f"No products table found for {url}")
-                return []
-
-            header_row = products_table.find('thead').find('tr')
-            if not header_row:
-                logger.warning(f"No header row found for {url}")
-                return []
-
-            header_row_columns = header_row.find_all('th')
-            header_row_columns_text = [column.text.strip() for column in header_row_columns]
-            logger.debug(f"Header columns for {url}: {header_row_columns_text}")
-
-            products_rows = products_table.find('tbody').find_all('tr')
-            logger.debug(f"Found {len(products_rows)} product rows for {url}")
-
-            products_data = []
-            for idx, product_row in enumerate(products_rows):
-                product_row_columns = product_row.find_all('td')
-                product_data = {}
-
-                for i, column in enumerate(product_row_columns):
-                    column_text = column.text.strip() if column.text.strip() else None
-                    if i < len(header_row_columns_text):
-                        product_data[header_row_columns_text[i]] = column_text
-                    else:
-                        logger.warning(f"Column index {i} out of range for headers in {url}")
-
-                products_data.append(product_data)
-                logger.debug(f"Processed product {idx + 1}/{len(products_rows)} for {url}")
-
-            logger.info(f"Successfully parsed {len(products_data)} products from {url}")
-            return products_data
-
-        except Exception as e:
-            logger.error(f"Error parsing page {url}: {str(e)}")
-            return []
-
-    async def parse_response(self, url, title=None, image=None):
-        logger.info(f"Starting async parsing process for: {title or url}")
-        start_time = time.time()
-
-        # Get all page URLs
-        all_pages_urls = await self.get_all_pages_urls(url)
-        logger.info(f"Total pages to process: {len(all_pages_urls)}")
-
-        if not all_pages_urls:
-            logger.error("No pages to process")
-            return []
-
-        # Create a shared client for better performance
-        async with httpx.AsyncClient(timeout=30, proxy=self.proxies, verify=False) as client:
-            # Process pages in batches for controlled concurrency
-            all_products_data = []
-            batch_size = self.max_concurrent_requests
-
-            for i in range(0, len(all_pages_urls), batch_size):
-                batch_urls = all_pages_urls[i:i + batch_size]
-                logger.info(
-                    f"Processing batch {i // batch_size + 1}/{(len(all_pages_urls) + batch_size - 1) // batch_size} "
-                    f"({len(batch_urls)} pages)")
-
-                # Create tasks for concurrent processing
-                tasks = [self.parse_single_page(url, client) for url in batch_urls]
-
-                # Execute batch concurrently
-                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Process results
-                for j, result in enumerate(batch_results):
-                    if isinstance(result, Exception):
-                        logger.error(f"Exception in batch {i // batch_size + 1}, page {j + 1}: {result}")
-                    else:
-                        # Add metadata to each product
-                        for product in result:
-                            if title:
-                                product['Category'] = title
-                            if image:
-                                product['Category_Image'] = image
-                            product['Source_URL'] = url
-
-                        all_products_data.extend(result)
-                        logger.debug(f"Added {len(result)} products from batch {i // batch_size + 1}, page {j + 1}")
-
-                # Longer delay between batches to avoid cookie-based blocking
-                if i + batch_size < len(all_pages_urls):
-                    batch_delay = random.uniform(5, 10)  # Increased random delay between 5-10 seconds
-                    logger.info(
-                        f"Completed batch {i // batch_size + 1}. Waiting {batch_delay:.2f} seconds before next batch...")
-                    await asyncio.sleep(batch_delay)
-
-        total_time = time.time() - start_time
-        logger.info(f"Completed parsing {len(all_pages_urls)} pages in {total_time:.2f} seconds")
-        logger.info(f"Total products collected: {len(all_products_data)}")
-
-        return all_products_data
 
 
 if __name__ == '__main__':
-    logger.info("This module should be run from alShamali/main.py")
-    logger.info("Please run: python alShamali/main.py")
+
+
+    asyncio.run(MrMediaRequestHelper(headers=MRMEDIA_HEADERS).main("https://directory.mymrmedia.com/allcategories.php"))
+    # asyncio.run(test_category())
+    # asyncio.run(test())
