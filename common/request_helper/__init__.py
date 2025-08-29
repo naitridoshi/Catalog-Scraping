@@ -14,7 +14,6 @@ from common.constants import BASIC_HEADERS
 from common.custom_logger import color_string, get_logger
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-import curl
 logger, listener = get_logger("RequestHelper")
 listener.start()
 
