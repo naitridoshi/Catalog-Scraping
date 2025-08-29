@@ -64,5 +64,8 @@ class MongoWriter:
             logger.error(f"Mongo insert failed: {e}")
 
 
-
-mongo_writer=MongoWriter(mongo_uri=MONGO_URI, db_name=DATABASE_NAME, collection_name=SBPARTS_CATALOG_COLLECTION)
+try:
+    mongo_writer=MongoWriter(mongo_uri=MONGO_URI, db_name=DATABASE_NAME, collection_name=SBPARTS_CATALOG_COLLECTION)
+except Exception as e:
+    logger.error(f"Error connecting to MongoDB: {str(e)}")
+    mongo_writer=None
