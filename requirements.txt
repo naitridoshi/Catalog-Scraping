@@ -11,3 +11,4 @@ psutil
 urllib3
 streamlit
 concurrent-log-handler
+googlesearch-python
