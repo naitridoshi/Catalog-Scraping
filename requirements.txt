@@ -13,3 +13,4 @@ streamlit
 concurrent-log-handler
 googlesearch-python
 google-generativeai
+python-dotenv
