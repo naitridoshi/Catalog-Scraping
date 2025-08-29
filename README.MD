@@ -1,5 +1,9 @@
 # Catalog Scraping Project
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://catalog-scraper.streamlit.app/)
+
+---
+
 ## Overview
 
 This project is a collection of web scrapers designed to extract data from various auto parts and business directory websites. The entire suite of scrapers is unified under a single, easy-to-use web interface built with Streamlit, allowing for simple operation without needing to edit code for most tasks.
