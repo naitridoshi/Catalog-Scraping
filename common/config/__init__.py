@@ -5,7 +5,7 @@ from dotenv import dotenv_values
 env_path = ".env"
 
 if not path.exists(env_path):
-    raise Exception(".env file not found")
+    print(f".env file not found at path: {env_path}")
 
 config = dotenv_values(env_path)
 MONGO_URI=config.get("MONGO_URI")
