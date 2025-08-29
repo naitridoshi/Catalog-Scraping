@@ -21,14 +21,14 @@ from worldTraders.main import run_world_traders_scraper_and_return_df
 from ui import alshamali, dlj_parts, insta_cafe, jinku, mr_media, qatar, sb_parts, supreme_motors, suzuki, world_traders
 
 SCRAPER_CONFIG = {
-    "AlShamali": {"ui": alshamali.render, "runner": run_alshamali_scraper_and_return_df, "async": True},
     "DLJ Parts": {"ui": dlj_parts.render, "runner": run_dljparts_scraper, "async": False},
     "Jikiu": {"ui": jinku.render, "runner": run_jinku_scraper, "async": False, "validate": lambda x: x and len(str(x)) >= 4, "error_msg": "Please provide a product ID with at least 4 digits."},
-    "Mr. Media": {"ui": mr_media.render, "runner": run_mr_media_scraper_and_return_df, "async": False},
-    # "Qatar CID": {"ui": qatar.render, "runner": run_qatar_scraper_and_return_df, "async": False},
     "SB Parts": {"ui": sb_parts.render, "runner": run_sbparts_scraper_for_part_number, "async": True, "validate": lambda x: x and len(str(x)) >= 4, "error_msg": "Please provide a product ID with at least 4 digits."},
-    # "Supreme Motors": {"ui": supreme_motors.render, "runner": run_supreme_motors_scraper_and_return_df, "async": True},
     "Suzuki": {"ui": suzuki.render, "runner": run_suzuki_scraper_and_return_df, "async": True},
+    "Mr. Media": {"ui": mr_media.render, "runner": run_mr_media_scraper_and_return_df, "async": False},
+    "AlShamali": {"ui": alshamali.render, "runner": run_alshamali_scraper_and_return_df, "async": True},
+    # "Qatar CID": {"ui": qatar.render, "runner": run_qatar_scraper_and_return_df, "async": False},
+    # "Supreme Motors": {"ui": supreme_motors.render, "runner": run_supreme_motors_scraper_and_return_df, "async": True},
     # "World Traders": {"ui": world_traders.render, "runner": run_world_traders_scraper_and_return_df, "async": False},
 }
 
