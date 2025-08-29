@@ -162,6 +162,55 @@ class AlShamaliRequestHelper:
             logger.error(f"Error saving JSON file {json_path}: {str(e)}")
             return None
 
+    def get_csv_content_as_string(self, data: List[Dict], title: str = None) -> str:
+        """
+        Get scraped data as a CSV formatted string.
+        
+        Args:
+            data: List of dictionaries containing scraped data
+            title: Title/category name to add as a column
+            
+        Returns:
+            str: CSV formatted string
+        """
+        if not data:
+            logger.warning(f"No data provided to create CSV string for {title}")
+            return ""
+            
+        try:
+            # Process price data before creating CSV string
+            processed_data = []
+            for item in data:
+                processed_item = item.copy()
+                
+                if 'Price' in processed_item and processed_item['Price']:
+                    price_data = self.parse_price_data(processed_item['Price'])
+                    processed_item['Price_AED'] = price_data['AED']
+                    processed_item['Price_USD'] = price_data['USD']
+                    processed_item['Price_Original'] = processed_item['Price']
+                
+                if title:
+                    processed_item['Category'] = title
+                
+                processed_data.append(processed_item)
+            
+            fieldnames = set()
+            for item in processed_data:
+                fieldnames.update(item.keys())
+            fieldnames = sorted(list(fieldnames))
+            
+            import io
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(processed_data)
+            
+            return output.getvalue()
+            
+        except Exception as e:
+            logger.error(f"Error creating CSV string for {title}: {str(e)}")
+            return ""
+
     async def request(
             self,
             url: str,

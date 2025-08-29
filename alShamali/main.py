@@ -11,7 +11,7 @@ from common.custom_logger import get_logger
 logger, listener = get_logger("AlShamaliScraper")
 listener.start()
 
-async def process_item(item, scraper):
+async def process_item(item, scraper, save:bool=True):
     """Process a single item asynchronously"""
     try:
         # Add delay before processing each item to avoid cookie-based blocking
@@ -21,21 +21,28 @@ async def process_item(item, scraper):
         
         logger.info(f"Processing item: {item['title']}")
         data = await scraper.parse_response(item['link'], item['title'], item['image'])
-        
+
         if data:
-            # Save to JSON
-            json_filename = f"{item['title'].replace(' ', '_').replace('/', '_')}_data"
-            scraper.save_to_json(data, json_filename)
-            
-            # Save to CSV
-            csv_filename = f"{item['title'].replace(' ', '_').replace('/', '_')}_data"
-            csv_path = scraper.save_to_csv(data, csv_filename, item['title'])
-            
+            csv_path = None
+            csv_content = None
+            if save:
+                # Save to JSON
+                json_filename = f"{item['title'].replace(' ', '_').replace('/', '_')}_data"
+                scraper.save_to_json(data, json_filename)
+
+                # Save to CSV
+                csv_filename = f"{item['title'].replace(' ', '_').replace('/', '_')}_data"
+                csv_path = scraper.save_to_csv(data, csv_filename, item['title'])
+            else:
+                # Get CSV content as a string for in-memory operations
+                csv_content = scraper.get_csv_content_as_string(data, item['title'])
+
             logger.info(f"Successfully processed {item['title']}: {len(data)} items")
             return {
                 'title': item['title'],
                 'data': data,
                 'csv_path': csv_path,
+                'csv_content': csv_content,
                 'count': len(data)
             }
         else:
@@ -44,6 +51,7 @@ async def process_item(item, scraper):
                 'title': item['title'],
                 'data': [],
                 'csv_path': None,
+                'csv_content': None,
                 'count': 0
             }
     except Exception as e:
@@ -52,6 +60,7 @@ async def process_item(item, scraper):
             'title': item['title'],
             'data': [],
             'csv_path': None,
+            'csv_content': None,
             'count': 0,
             'error': str(e)
         }
@@ -118,9 +127,9 @@ async def main():
     logger.info("Starting AlShamali scraper...")
     
     # Add initial delay to avoid immediate cookie-based blocking
-    initial_delay = random.uniform(5, 10)  # Random delay between 5-10 seconds
-    logger.info(f"Initial delay: Waiting {initial_delay:.2f} seconds before starting...")
-    await asyncio.sleep(initial_delay)
+    # initial_delay = random.uniform(1, 5)  # Random delay between 5-10 seconds
+    # logger.info(f"Initial delay: Waiting {initial_delay:.2f} seconds before starting...")
+    # await asyncio.sleep(initial_delay)
     
     logger.info("Loading items...")
     
@@ -180,6 +189,94 @@ async def main():
     
     if excel_path:
         logger.info(f"Combined Excel workbook saved to: {excel_path}")
+
+async def run_alshamali_scraper_and_return_df(selected_items: list[dict], output_option: str):
+    logger.info(f"Starting AlShamali scraper for Streamlit app with output option: {output_option}")
+
+    initial_delay = random.uniform(1, 3)
+    logger.info(f"Initial delay: Waiting {initial_delay:.2f} seconds before starting...")
+    await asyncio.sleep(initial_delay)
+
+    if not selected_items:
+        logger.warning("No items selected to scrape.")
+        return None, None
+
+    scraper = AlShamaliRequestHelper(headers=HEADERS, max_concurrent_requests=5)
+
+    max_concurrent = 3
+    results = []
+
+    for i in range(0, len(selected_items), max_concurrent):
+        batch = selected_items[i:i + max_concurrent]
+        logger.info(f"Processing batch {i//max_concurrent + 1}/{(len(selected_items) + max_concurrent - 1)//max_concurrent} "
+                   f"({len(batch)} items)")
+        # When called from streamlit, always use save=False
+        tasks = [process_item(item, scraper, save=False) for item in batch]
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for j, result in enumerate(batch_results):
+            if isinstance(result, Exception):
+                logger.error(f"Exception in batch {i//max_concurrent + 1}, item {j + 1}: {result}")
+                results.append({
+                    'title': batch[j]['title'],
+                    'data': [],
+                    'count': 0,
+                    'error': str(result)
+                })
+            else:
+                results.append(result)
+
+        if i + max_concurrent < len(selected_items):
+            batch_delay = random.uniform(3, 5)
+            logger.info(f"Waiting {batch_delay:.2f} seconds before next batch...")
+            await asyncio.sleep(batch_delay)
+
+    if output_option == 'Combine into a single data table':
+        all_data = []
+        for result in results:
+            if result.get('data'):
+                all_data.extend(result['data'])
+
+        if all_data:
+            df = pd.DataFrame(all_data)
+            if 'Price' in df.columns:
+                price_data = df['Price'].apply(scraper.parse_price_data)
+                df['Price_AED'] = price_data.apply(lambda x: x['AED'])
+                df['Price_USD'] = price_data.apply(lambda x: x['USD'])
+                df['Price_Original'] = df['Price']
+                df = df.drop('Price', axis=1)
+            return df, None
+        else:
+            return pd.DataFrame(), None
+    else: # Separate files
+        processed_results = []
+        for result in results:
+            brand_df = pd.DataFrame(result['data']) if result.get('data') else pd.DataFrame()
+            if not brand_df.empty and 'Price' in brand_df.columns:
+                price_data = brand_df['Price'].apply(scraper.parse_price_data)
+                brand_df['Price_AED'] = price_data.apply(lambda x: x['AED'])
+                brand_df['Price_USD'] = price_data.apply(lambda x: x['USD'])
+                brand_df['Price_Original'] = brand_df['Price']
+                brand_df = brand_df.drop('Price', axis=1)
+            
+            processed_results.append({
+                'title': result.get('title', 'N/A'),
+                'count': result.get('count', 0),
+                'status': 'Success' if result.get('count', 0) > 0 else 'Failed',
+                'error': result.get('error', ''),
+                'dataframe': brand_df,
+                'csv_content': result.get('csv_content', '')
+            })
+        return None, processed_results
+
+def get_all_brands():
+    alshamali_items_path = "alShamali/items.json"
+    alshamali_brands = []
+    if os.path.exists(alshamali_items_path):
+        with open(alshamali_items_path, 'r') as f:
+            alshamali_items_data = json.load(f)
+    return alshamali_items_data
+
 
 if __name__ == "__main__":
     asyncio.run(main())
