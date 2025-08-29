@@ -44,6 +44,7 @@ class AlShamaliRequestHelper:
         self.max_concurrent_requests = max_concurrent_requests
         logger.info(f"Initialized AlShamaliRequestHelper with max_concurrent_requests={max_concurrent_requests}")
 
+    @staticmethod
     def _cookie_from_secrets():
         raw = _secrets.get("ALSHAMALI_COOKIE") or os.getenv("ALSHAMALI_COOKIE")
         if not raw:
