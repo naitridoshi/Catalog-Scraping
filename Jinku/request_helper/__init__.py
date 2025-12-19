@@ -355,13 +355,57 @@ class JinkuRequestHelper(RequestHelper):
             logger.error(f"Error processing file {filename}: {e}")
 
     def scrape_each_product_cards(self, cards:list[str]):
+
+        all_details = []
         for card in cards:
+            card_details={}
             response = self.request(card)
             if response is None:
                 logger.error(f"Error fetching engine related data for {card}")
                 continue
 
             soup = BeautifulSoup(response.text, 'html.parser')
+
+            #TODO: Get the RED THING. IDENTIFY WHAT IT IS AND THEN GET IT
+            vehicle_mods = []
+
+            vehicle_info_class = soup.find(class_="vehicle-info")
+
+            if vehicle_info_class:
+                p = vehicle_info_class.find("p")
+                if p:
+                    label = p.find("strong").get_text(strip=True)
+                    value = p.get_text(strip=True).replace(label, "").strip()
+
+                    # remove brackets
+                    value = value.strip("[]")
+
+                    if label == "Mod:":
+                        vehicle_mods = [v.strip() for v in value.split(",") if v.strip()]
+                        card_details["model"] = vehicle_mods
+
+            engine_info_class=soup.find(class_="d-flex")
+            if engine_info_class:
+                engine_codes =[]
+                engine_cc = None
+                for p in engine_info_class.find_all("p"):
+                    label = p.find("strong").get_text(strip=True)
+                    value = p.get_text(strip=True).replace(label, "").strip()
+
+                    # remove surrounding brackets
+                    value = value.strip("[]")
+
+                    if label == "Eng cc:":
+                        engine_cc = value
+                        card_details["eng_cc"]=engine_cc
+
+                    elif label == "Eng code:":
+                        engine_codes = [v.strip() for v in value.split(",") if v.strip()]
+                        card_details["eng_code"] = engine_codes
+
+            all_details.append(card_details)
+
+        return all_details
 
 
     def fetch_engine_related_data(self, jinku_product_id:str, jinku_url:str):
