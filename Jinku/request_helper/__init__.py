@@ -354,6 +354,38 @@ class JinkuRequestHelper(RequestHelper):
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.error(f"Error processing file {filename}: {e}")
 
+    def scrape_each_product_cards(self, cards:list[str]):
+        for card in cards:
+            response = self.request(card)
+            if response is None:
+                logger.error(f"Error fetching engine related data for {card}")
+                continue
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+
+    def fetch_engine_related_data(self, jinku_product_id:str, jinku_url:str):
+        response = self.request(jinku_url)
+        if response is None:
+            logger.error(f"Error fetching engine related data for {jinku_product_id}")
+            return None
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        accordian = soup.find(id="accordionSearchResult")
+        if accordian is None:
+            logger.warning(f"No accordion found for {jinku_product_id}")
+
+        cards = accordian.find_all(class_="card")
+        all_cards = []
+
+        for card in cards:
+            link = card.find("a")
+            if link and link.has_attr("href"):
+                 all_cards.append(link["href"])
+
+
+
+
 
 if __name__ == '__main__':
     scraper = JinkuRequestHelper(
