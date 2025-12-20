@@ -70,10 +70,18 @@ class DLJRequestHelper(RequestHelper):
             return [], None
 
     @staticmethod
-    def save_to_excel(data_list, filename, url, max_oem_count):
+    def create_dataframe(data_list, max_oem_count):
+        if not data_list:
+            return pd.DataFrame()
+        headers = [f"OEM NO. {i + 1}" for i in range(max_oem_count)] + ["CAR NAME", "PRODUCT", "YEAR", "POSITION", "PIC"]
+        df = pd.DataFrame(data_list, columns=headers)
+        return df
+
+    @staticmethod
+    def save_to_excel(df, filename, url):
         try:
-            if not data_list:
-                logger.warning("No data to save. The list is empty.")
+            if df.empty:
+                logger.warning("No data to save. The DataFrame is empty.")
                 raise Exception("EMPTY DATA")
 
             directory = os.path.dirname(filename)
@@ -81,45 +89,37 @@ class DLJRequestHelper(RequestHelper):
                 os.makedirs(directory, exist_ok=True)
                 logger.info(f"Created directory: {directory}")
 
-            headers = [f"OEM NO. {i + 1}" for i in range(max_oem_count)] + ["CAR NAME", "PRODUCT", "YEAR", "POSITION",
-                                                                            "PIC"]
-            df = pd.DataFrame(data_list, columns=headers)
-
             sheet_name = f"DLJ-{str(url.split('=')[-1]).upper()[:25]}"
             with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name=sheet_name)
                 workbook = writer.book
                 worksheet = writer.sheets[sheet_name]
 
-                # Header Format: Bold, White Text, Blue Background
                 header_format = workbook.add_format({
                     'bold': True,
                     'text_wrap': True,
                     'valign': 'center',
-                    'fg_color': '#4F81BD',  # background color
-                    'font_color': 'white',  # text color
+                    'fg_color': '#4F81BD',
+                    'font_color': 'white',
                     'border': 1
                 })
 
                 for col_num, value in enumerate(df.columns.values):
                     worksheet.write(0, col_num, value, header_format)
 
-                # Cell Format: Border, Text Wrap
                 cell_format = workbook.add_format({
                     'border': 1,
                     'text_wrap': True,
                     'valign': 'top'
                 })
 
-                # Apply cell format to the entire data range
                 for row_num in range(1, len(df) + 1):
                     for col_num in range(len(df.columns)):
                         worksheet.write(row_num, col_num, df.iloc[row_num - 1, col_num], cell_format)
 
-                # Auto-adjust column width
                 for i, column in enumerate(df.columns):
                     max_len = max(df[column].astype(str).map(len).max(), len(column))
-                    adjusted_width = min(max_len + 2, 30)  # Cap width to 30 characters
+                    adjusted_width = min(max_len + 2, 30)
                     worksheet.set_column(i, i, adjusted_width)
 
             logger.info(f"Data successfully saved and prettified to {filename}")
@@ -143,12 +143,22 @@ class DLJRequestHelper(RequestHelper):
             logger.warning("Sending original soup to parse")
             return self.parse_dlj_data(soup)
 
-    def main(self, main_url,filename):
+    def main(self, main_url, filename=None, return_df=False):
         raw_data, max_oem_count = self.get_data_from_url_using_soup(main_url)
-        if max_oem_count:
-            self.save_to_excel(raw_data,filename,main_url,max_oem_count)
+        
+        if not raw_data:
+            logger.error("Failed to get data or no data found.")
+            return pd.DataFrame() if return_df else None
+
+        df = self.create_dataframe(raw_data, max_oem_count)
+
+        if return_df:
+            return df
         else:
-            logger.error("Failed to save...")
+            if filename:
+                self.save_to_excel(df, filename, main_url)
+            else:
+                logger.error("Filename not provided for saving.")
 
     @staticmethod
     def clean_text_from_json(filename: str):

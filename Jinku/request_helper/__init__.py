@@ -3,7 +3,7 @@ import json
 import multiprocessing
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import psutil
@@ -11,6 +11,7 @@ import pytz
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+import pandas as pd
 
 # from common.config import DATA_CENTER_PROXIES
 from common.constants import BASIC_HEADERS, BATCH_SIZE, MAX_PROCESSES
@@ -28,7 +29,8 @@ dubai_tz = pytz.timezone("Asia/Dubai")
 class JinkuRequestHelper(RequestHelper):
     def __init__(self, proxies: dict = None, headers: dict = BASIC_HEADERS):
         super().__init__(proxies, headers)
-        self.shared_list = multiprocessing.Manager().list()
+        self.shared_list = multiprocessing.Manager().list() # Still needed for DB worker if used
+        self.collected_data = []
 
 
     def get_list_of_urls(self, url: str):
@@ -68,6 +70,47 @@ class JinkuRequestHelper(RequestHelper):
         memory_available=mem.available / mem.total
         logger.warning(f"Memory Available - {memory_available}")
         return memory_available > 0.2  # Ensure at least 20% free memory
+
+    @staticmethod
+    def format_product_details_for_df(url: str, product_details: str, product_images: list,
+                                      specifications_dict: dict, crosses_list: list, return_df:bool=False) -> list[dict]:
+        if product_details:
+            product_name = product_details.split("|")[0].strip()
+            jinku_product_id = product_details.split("|")[-1].split("-")[-1].strip()
+        else:
+            logger.error("Product Details is None")
+            product_name = None
+            jinku_product_id = None
+
+        if return_df:
+            base_doc = {
+                "jikiu_url": url,
+                "product_name": product_name,
+                "product_image": product_images,
+                "jikiu_product_id": jinku_product_id,
+                "specifications": specifications_dict
+            }
+        else:
+            base_doc = {
+                "jinku_url": url,
+                "product_name": product_name,
+                "product_image": product_images,
+                "jinku_product_id": jinku_product_id,
+                "specifications": specifications_dict
+            }
+
+        formatted_data = []
+        if not crosses_list:
+            formatted_data.append(base_doc)
+        else:
+            for cross in crosses_list:
+                cross_doc = base_doc.copy()
+                if isinstance(cross, dict):
+                    cross_doc.update(cross)
+                else:
+                    cross_doc.update({"Owner": cross, "Number": None}) # Assuming cross is just a string here
+                formatted_data.append(cross_doc)
+        return formatted_data
 
     def format_and_store_product_details_in_database(self,url:str, product_details:str, product_images:list,
                                                      specifications_dict:dict, crosses_list:list):
@@ -179,7 +222,7 @@ class JinkuRequestHelper(RequestHelper):
                     logger.warning(f"Cross not a dict - appending {p} to list")
                     crosses_list.append({"Owner":item.text.strip(),"Number":item.text.strip()})
 
-        return self.format_and_store_product_details_in_database(url,product_details, product_images, specifications_dict, crosses_list)
+        return url, product_details, product_images, specifications_dict, crosses_list
 
     def get_data_from_url_using_soup(self, url: str):
         response = self.request(url)
@@ -197,27 +240,47 @@ class JinkuRequestHelper(RequestHelper):
             logger.warning("Sending original soup to parse")
             return self.parse_jinku_data_from_soup(soup, url)
 
+    def get_data_from_url_using_soup_for_df(self, url: str, return_df: bool = False):
+        response = self.request(url)
+        if response is None:
+            return None
+        logger.debug(
+            f'Got the response for {url}, data length: {len(response.text)}'
+        )
+        soup = BeautifulSoup(response.text, 'html.parser')
+        search_result_class = soup.find(class_="searchresult")
+        if search_result_class:
+            logger.info("Sending search result class soup to parse for DataFrame collection")
+            url, product_details, product_images, specifications_dict, crosses_list = self.parse_jinku_data_from_soup(search_result_class, url)
+        else:
+            logger.warning("Sending original soup to parse for DataFrame collection")
+            url, product_details, product_images, specifications_dict, crosses_list = self.parse_jinku_data_from_soup(soup, url)
 
-    def process_url(self, url,errored_urls):
+        formatted_data = self.format_product_details_for_df(url, product_details, product_images, specifications_dict, crosses_list, return_df)
+        self.collected_data.extend(formatted_data)
+
+
+    def process_url(self, url, errored_urls, return_df: bool = False):
         try:
             logger.debug(f"Processing URL - {url}")
-            self.get_data_from_url_using_soup(url)
+            if return_df:
+                self.get_data_from_url_using_soup_for_df(url, return_df)
+            else:
+                self.get_data_from_url_using_soup(url)
         except Exception as e:
             logger.error(f"Error processing {url}: {e}")
             errored_urls.append(url)
 
-    def main(self, main_url,filename):
+    def main(self, main_url, filename, return_df: bool = False):
         urls = self.get_list_of_urls(main_url)
 
         if urls is None or len(urls)==0:
             logger.error('Failed to retrieve URLs')
-            return
+            return pd.DataFrame() if return_df else None
 
         pdf_urls = []
         valid_urls = []
-        # Use a Manager list for errored URLs in multiprocessing
-        manager = multiprocessing.Manager()
-        errored_urls = manager.list()
+        errored_urls = []
 
         for url in urls:
             if not str(url).startswith("http"):
@@ -235,42 +298,47 @@ class JinkuRequestHelper(RequestHelper):
 
             valid_urls.append(full_url)
 
-        # Start the DB worker process for batch inserts
-        db_worker = multiprocessing.Process(target=self.insert_to_db_worker, daemon=True)
-        db_worker.start()
+        db_worker = None
+        if not return_df:
+            db_worker = multiprocessing.Process(target=self.insert_to_db_worker, daemon=True)
+            db_worker.start()
 
-        if not self.check_memory():
-            logger.warning("Low memory detected, running sequentially.")
-            for url in valid_urls:
-                self.process_url(url, errored_urls)
-        else:
-            with ProcessPoolExecutor(max_workers=MAX_PROCESSES) as executor:
-                futures = {executor.submit(self.process_url, url, errored_urls): url for url in valid_urls}
-                for future in as_completed(futures):
+        self.collected_data = []
+
+        # Using ThreadPoolExecutor for I/O-bound tasks
+        with ThreadPoolExecutor(max_workers=MAX_PROCESSES) as executor:
+            futures = {executor.submit(self.process_url, url, errored_urls, return_df): url for url in valid_urls}
+            for future in as_completed(futures):
+                try:
+                    future.result()  # Check for exceptions
+                except Exception as e:
                     url = futures[future]
-                    try:
-                        future.result()
-                        logger.info(f"Successfully processed {url}")
-                    except Exception as e:
-                        logger.error(f"Error processing {url}: {e}")
-                        errored_urls.append(url)
+                    logger.error(f"Error in thread for {url}: {e}")
 
-        db_worker.terminate()
-        db_worker.join()
+        if db_worker:
+            db_worker.terminate()
+            db_worker.join()
 
+        if not return_df:
+            if pdf_urls:
+                with open(f"{str(filename).split('.')[0]}_pdf.json", "w") as file:
+                    json.dump(pdf_urls, file, indent=4)
+                logger.debug(f'PDF urls saved to {str(filename).split(".")[0]}_pdf.json')
 
-
-        if pdf_urls:
-            with open(f"{str(filename).split('.')[0]}_pdf.json", "w") as file:
-                json.dump(pdf_urls, file, indent=4)
-            logger.debug(f'PDF urls saved to {str(filename).split(".")[0]}_pdf.json')
-
-        if errored_urls:
-            with open(f"{str(filename).split('.')[0]}_errored.json", "w") as file:
-                json.dump(list(errored_urls), file, indent=4)
-            logger.debug(f'Errored urls saved to {str(filename).split(".")[0]}_errored.json')
+            if errored_urls:
+                with open(f"{str(filename).split('.')[0]}_errored.json", "w") as file:
+                    json.dump(list(errored_urls), file, indent=4)
+                logger.debug(f'Errored urls saved to {str(filename).split(".")[0]}_errored.json')
 
         logger.info("All URLs processed successfully!")
+
+        if return_df:
+            if self.collected_data:
+                df = pd.DataFrame(self.collected_data)
+                self.collected_data = [] # Clear for next run
+                return df
+            else:
+                return pd.DataFrame()
 
 
     @staticmethod

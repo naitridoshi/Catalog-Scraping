@@ -312,10 +312,12 @@ class SupremeMotorsRequestHelper:
             logger.error(f"Error closing CSV file: {e}")
         return None
 
-    async def parse_url_with_csv(self, url: str):
+    async def parse_url_with_csv(self, url: str, return_df: bool = False):
         """Parse URL and add to CSV"""
         data = await self.parse_url(url)
         if data:
+            if return_df:
+                return data
             success = self.add_row_to_csv(data)
             return data, success
         return None, None
@@ -333,11 +335,13 @@ class SupremeMotorsRequestHelper:
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.error(f"Error processing file {filename}: {e}")
 
-    async def main(self):
+    async def main(self, return_df: bool = False):
         # Initialize CSV file
-        if not self.initialize_csv():
-            logger.error("Failed to initialize CSV file")
-            return
+
+        if not return_df:
+            if not self.initialize_csv():
+                logger.error("Failed to initialize CSV file")
+                return
         
         try:
             # Get all URLs first
@@ -351,14 +355,14 @@ class SupremeMotorsRequestHelper:
             # Limit concurrent operations to 10
             semaphore = asyncio.Semaphore(10)
             
-            async def parse_url_with_limit(url: str):
+            async def parse_url_with_limit(url: str, return_df: bool):
                 async with semaphore:
-                    return await self.parse_url_with_csv(url)
+                    return await self.parse_url_with_csv(url, return_df)
             
             # Process URLs in parallel using asyncio with limited concurrency
             tasks = []
             for url in all_urls:
-                task = asyncio.create_task(parse_url_with_limit(url))
+                task = asyncio.create_task(parse_url_with_limit(url, return_df))
                 tasks.append(task)
             
             # Wait for all tasks to complete
@@ -375,16 +379,22 @@ class SupremeMotorsRequestHelper:
                     logger.info(f"Successfully processed URL {list(all_urls)[i]}")
             
             # Save all data to JSON file
-            with open('data2.json', 'w') as f:
-                json.dump(self.shared_list, f, indent=4)
-            
+            if not return_df:
+                with open('data2.json', 'w') as f:
+                    json.dump(self.shared_list, f, indent=4)
+
+
             logger.info(f"Processing completed. {len(successful_results)} URLs processed successfully.")
             
         finally:
             # Close CSV file
-            csv_file = self.close_csv()
-            if csv_file:
-                logger.info(f"All data saved to CSV: {csv_file}")
+            if not return_df:
+                csv_file = self.close_csv()
+                if csv_file:
+                    logger.info(f"All data saved to CSV: {csv_file}")
+            else:
+                logger.info("Data ready to be returned as DataFrame")
+                return self.shared_list
 
 
 if __name__ == '__main__':

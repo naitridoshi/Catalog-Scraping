@@ -29,6 +29,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger, listener = get_logger("AlShamaliRequestHelper")
 listener.start()
 
+try:
+    import streamlit as st
+    _secrets = st.secrets
+except Exception:
+    _secrets = {}
+
 
 class AlShamaliRequestHelper:
     def __init__(self, proxies: dict = None, headers: dict = BASIC_HEADERS, max_concurrent_requests: int = 5):
@@ -37,6 +43,22 @@ class AlShamaliRequestHelper:
         self.shared_list = []
         self.max_concurrent_requests = max_concurrent_requests
         logger.info(f"Initialized AlShamaliRequestHelper with max_concurrent_requests={max_concurrent_requests}")
+
+    @staticmethod
+    def _cookie_from_secrets():
+        raw = _secrets.get("ALSHAMALI_COOKIE") or os.getenv("ALSHAMALI_COOKIE")
+        if not raw:
+            return None
+
+        jar = httpx.Cookies()
+
+        for part in raw.split(";"):
+            part = part.strip()
+
+        if "=" in part:
+            k, v = part.split("=", 1)
+            jar.set(k.strip(), v.strip(), domain="alshamali.online")
+        return jar
 
     def save_to_csv(self, data: List[Dict], filename: str, title: str = None) -> str:
         """
@@ -162,6 +184,55 @@ class AlShamaliRequestHelper:
             logger.error(f"Error saving JSON file {json_path}: {str(e)}")
             return None
 
+    def get_csv_content_as_string(self, data: List[Dict], title: str = None) -> str:
+        """
+        Get scraped data as a CSV formatted string.
+        
+        Args:
+            data: List of dictionaries containing scraped data
+            title: Title/category name to add as a column
+            
+        Returns:
+            str: CSV formatted string
+        """
+        if not data:
+            logger.warning(f"No data provided to create CSV string for {title}")
+            return ""
+            
+        try:
+            # Process price data before creating CSV string
+            processed_data = []
+            for item in data:
+                processed_item = item.copy()
+                
+                if 'Price' in processed_item and processed_item['Price']:
+                    price_data = self.parse_price_data(processed_item['Price'])
+                    processed_item['Price_AED'] = price_data['AED']
+                    processed_item['Price_USD'] = price_data['USD']
+                    processed_item['Price_Original'] = processed_item['Price']
+                
+                if title:
+                    processed_item['Category'] = title
+                
+                processed_data.append(processed_item)
+            
+            fieldnames = set()
+            for item in processed_data:
+                fieldnames.update(item.keys())
+            fieldnames = sorted(list(fieldnames))
+            
+            import io
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(processed_data)
+            
+            return output.getvalue()
+            
+        except Exception as e:
+            logger.error(f"Error creating CSV string for {title}: {str(e)}")
+            return ""
+
     async def request(
             self,
             url: str,
@@ -201,6 +272,7 @@ class AlShamaliRequestHelper:
                         json=json,
                         data=data,
                         headers=headers,
+                        cookies=self._cookie_from_secrets()
                     )
                     time_taken = f'{time.time() - start_time:.2f} seconds'
 

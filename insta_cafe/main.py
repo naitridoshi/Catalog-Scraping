@@ -1,4 +1,5 @@
 import json
+import pandas as pd
 
 from common.custom_logger import get_logger
 from insta_cafe import get_links_from_google_search, get_page_information, InstaCafeRequestHelper
@@ -27,6 +28,16 @@ def main(query, request_helper):
     # with open("files/cafe.json","w") as f:
     #     json.dump(all_info, f, indent=4)
     # logger.info("DONE")
+
+def run_insta_cafe_scraper_and_return_df(query: str):
+    logger.info(f"Starting Insta Cafe scraper for Streamlit app with query: {query}")
+    request_helper = InstaCafeRequestHelper()
+    page_information = main(query, request_helper)
+    if page_information:
+        return pd.DataFrame([page_information])
+    else:
+        return pd.DataFrame()
+
 
 if __name__ == '__main__':
     request_helper=InstaCafeRequestHelper()

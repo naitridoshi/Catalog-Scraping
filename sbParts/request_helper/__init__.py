@@ -14,6 +14,7 @@ import pytz
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+import pandas as pd
 
 # from common.config import DATA_CENTER_PROXIES
 from common.constants import BASIC_HEADERS, BATCH_SIZE, MAX_PROCESSES
@@ -33,6 +34,7 @@ class SbPartsRequestHelper:
         self.proxies = proxies
         self.headers = headers
         self.shared_list = multiprocessing.Manager().list()
+        self.collected_data = []
 
     @staticmethod
     def httpx_request_to_curl(request: httpx.Request) -> str:
@@ -169,6 +171,63 @@ class SbPartsRequestHelper:
             json.dump(no_response_prefixes, f, indent=4)
         logger.info(f"Completed collection of all part numbers. No response for {len(no_response_prefixes)} prefixes. Saved to files/no_response_prefixes.json.")
 
+    async def collect_part_number(self, part_number: str):
+        logger.info(f"Starting collection for part number: {part_number}.")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            payload = {"search_part": part_number}
+            logger.debug(f"Fetching data for part number: {part_number}")
+            response = await self.request(
+                url=GET_PART_NUMBER_URL,
+                method="POST",
+                json=payload,
+                client=client
+            )
+            if response:
+                try:
+                    data = response.json()
+                    logger.debug(f"Received response for part number {part_number}: {str(data)}")
+                    return data
+                except ValueError as e:
+                    logger.error(
+                        f"Failed to parse JSON for part number {part_number}: {e}. Raw response: {response.text}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing response for {part_number}: {e}")
+            else:
+                logger.warning(f"No response received for part number {part_number}.")
+        return None
+
+    async def process_collected_parts(self, collected_parts: list, return_df: bool = False):
+        if not collected_parts:
+            logger.warning("No collected parts to process.")
+            if return_df:
+                return pd.DataFrame()
+            return None
+
+        for count, item in enumerate(collected_parts):
+            logger.info(f"Processing item {count + 1} of {len(collected_parts)}")
+            all_docs = await self.parse_catalog_page(pid=item['pid'], part_no=item['part_no'], brand=item['p_brand'])
+            logger.info(f"Processed item {count + 1} of {len(collected_parts)}")
+
+            if all_docs:
+                if return_df:
+                    self.collected_data.extend(all_docs)
+                else:
+                    logger.info(f"Saving {len(all_docs)} documents for item {count + 1} of {len(collected_parts)}")
+                    await mongo_writer.save_response(all_docs)
+                    logger.info(f"Saved item {count + 1} of {len(collected_parts)}")
+            else:
+                logger.warning(f"No documents found for item {count + 1} of {len(collected_parts)}")
+
+        if return_df:
+            if self.collected_data:
+                df = pd.DataFrame(self.collected_data)
+                self.collected_data = []  # Clear for next run
+                return df
+            else:
+                return pd.DataFrame()
+        return None
+
     @staticmethod
     def clean_text_from_json(filename: str):
         try:
@@ -297,7 +356,7 @@ class SbPartsRequestHelper:
             data = json.load(f)
         return data
 
-    async def main(self, filename: str):
+    async def main(self, product_id:str, filename: str, return_df: bool = False):
         data = await self.read_from_file(filename)
         for count, item in enumerate(data):
             logger.info(f"Processing item {count + 1} of {len(data)}")
@@ -305,12 +364,24 @@ class SbPartsRequestHelper:
             logger.info(f"Processed item {count + 1} of {len(data)}")
 
             if all_docs:
-                logger.info(f"Saving {len(all_docs)} documents for item {count + 1} of {len(data)}")
-                await mongo_writer.save_response(all_docs)
-                logger.info(f"Saved item {count + 1} of {len(data)}")
+                if return_df:
+                    self.collected_data.extend(all_docs)
+                else:
+                    logger.info(f"Saving {len(all_docs)} documents for item {count + 1} of {len(data)}")
+                    await mongo_writer.save_response(all_docs)
+                    logger.info(f"Saved item {count + 1} of {len(data)}")
             else:
                 logger.warning(f"No documents found for item {count + 1} of {len(data)}")
-            break
+            # Removed the 'break' statement here to process all items
+
+        if return_df:
+            if self.collected_data:
+                df = pd.DataFrame(self.collected_data)
+                self.collected_data = [] # Clear for next run
+                return df
+            else:
+                return pd.DataFrame()
+        return None
 
 if __name__ == '__main__':
     scraper = SbPartsRequestHelper(
