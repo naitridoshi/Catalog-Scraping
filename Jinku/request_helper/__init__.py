@@ -5,6 +5,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
 
 import psutil
 import pytz
@@ -354,89 +355,208 @@ class JinkuRequestHelper(RequestHelper):
         except (FileNotFoundError, json.JSONDecodeError) as e:
             logger.error(f"Error processing file {filename}: {e}")
 
-    def scrape_each_product_cards(self, cards:list[str]):
+    def scrape_each_product_cards(self, cards: List[str]) -> List[Dict[str, Any]]:
+        all_details: List[Dict[str, Any]] = []
 
-        all_details = []
         for card in cards:
-            card_details={}
+            card_details: Dict[str, Any] = {}
             response = self.request(card)
             if response is None:
                 logger.error(f"Error fetching engine related data for {card}")
                 continue
 
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, "html.parser")
 
-            #TODO: Get the RED THING. IDENTIFY WHAT IT IS AND THEN GET IT
-            vehicle_mods = []
+            model_and_class = soup.find("button", class_="model-title")
+            if model_and_class:
+                model_info = model_and_class.text.split("»")
+
+                brand = model_info[0].strip()
+
+                # Only the first meaningful token (e.g., "TOYOTA"), nothing after it.
+                # Example chunk: " TOYOTA \n\xa0\xa0\xa0\xa0\n 01.74~12.22"
+                model = model_info[1].strip().split()[0] if len(model_info) > 1 else None
+
+                card_details["brand"] = brand
+                card_details["class"] = model
 
             vehicle_info_class = soup.find(class_="vehicle-info")
-
             if vehicle_info_class:
+                # Mod:
                 p = vehicle_info_class.find("p")
-                if p:
+                if p and p.find("strong"):
                     label = p.find("strong").get_text(strip=True)
-                    value = p.get_text(strip=True).replace(label, "").strip()
-
-                    # remove brackets
-                    value = value.strip("[]")
+                    value = p.get_text(strip=True).replace(label, "").strip().strip("[]")
 
                     if label == "Mod:":
                         vehicle_mods = [v.strip() for v in value.split(",") if v.strip()]
-                        card_details["model"] = vehicle_mods
+                        card_details["mod"] = vehicle_mods
 
-            engine_info_class=soup.find(class_="d-flex")
-            if engine_info_class:
-                engine_codes =[]
-                engine_cc = None
-                for p in engine_info_class.find_all("p"):
-                    label = p.find("strong").get_text(strip=True)
-                    value = p.get_text(strip=True).replace(label, "").strip()
+                # Engine info
+                engine_info_class = vehicle_info_class.find("div", class_="d-flex")
+                if engine_info_class:
+                    for p in engine_info_class.find_all("p"):
+                        strong = p.find("strong")
+                        if not strong:
+                            continue
+                        label = strong.get_text(strip=True)
+                        value = p.get_text(strip=True).replace(label, "").strip().strip("[]")
 
-                    # remove surrounding brackets
-                    value = value.strip("[]")
-
-                    if label == "Eng cc:":
-                        engine_cc = value
-                        card_details["eng_cc"]=engine_cc
-
-                    elif label == "Eng code:":
-                        engine_codes = [v.strip() for v in value.split(",") if v.strip()]
-                        card_details["eng_code"] = engine_codes
+                        if label == "Eng cc:":
+                            engine_ccs = [v.strip() for v in value.split(",") if v.strip()]
+                            card_details["eng_cc"] = engine_ccs
+                        elif label == "Eng code:":
+                            engine_codes = [v.strip() for v in value.split(",") if v.strip()]
+                            card_details["eng_code"] = engine_codes
 
             all_details.append(card_details)
 
         return all_details
 
-
-    def fetch_engine_related_data(self, jinku_product_id:str, jinku_url:str):
+    def fetch_engine_related_data(self, jinku_product_id: str, jinku_url: str) -> Optional[Dict[str, Any]]:
         response = self.request(jinku_url)
         if response is None:
             logger.error(f"Error fetching engine related data for {jinku_product_id}")
             return None
 
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.text, "html.parser")
         accordian = soup.find(id="accordionSearchResult")
         if accordian is None:
             logger.warning(f"No accordion found for {jinku_product_id}")
+            return {
+                "jinku_product_id": jinku_product_id,
+                "jinku_url": jinku_url,
+                "model_and_engine_details": [],
+            }
 
         cards = accordian.find_all(class_="card")
-        all_cards = []
+        all_cards: List[str] = []
 
         for card in cards:
             link = card.find("a")
             if link and link.has_attr("href"):
-                 all_cards.append(link["href"])
+                all_cards.append(link["href"])
 
+        model_details = self.scrape_each_product_cards(all_cards)
 
+        all_details: Dict[str, Any] = {
+            "jinku_product_id": jinku_product_id,
+            "jinku_url": jinku_url,
+            "model_and_engine_details": model_details,
+        }
+        return all_details
 
+    def _load_jobs_from_json(self, input_json_path: str) -> List[Dict[str, str]]:
+        """
+        Expected input JSON formats (either is fine):
 
+        1) A list:
+        [
+          {"jinku_product_id": "123", "jinku_url": "https://..."},
+          ...
+        ]
+
+        2) A dict with a key holding the list:
+        {"items": [ ...same objects... ]}
+        """
+        with open(input_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            # common container keys
+            for key in ("products", "items", "data", "records", "results"):
+                if key in data and isinstance(data[key], list):
+                    items = data[key]
+                    break
+            else:
+                raise ValueError(
+                    "Input JSON must be a list OR a dict containing a list under one of: "
+                    "items/data/records/results"
+                )
+        else:
+            raise ValueError("Input JSON must be a list or a dict containing a list.")
+
+        jobs: List[Dict[str, str]] = []
+        for i, row in enumerate(items):
+            if not isinstance(row, dict):
+                logger.warning(f"Skipping non-dict item at index {i}: {row!r}")
+                continue
+            pid = row.get("jinku_product_id")
+            url = row.get("jinku_url")
+            if not pid or not url:
+                logger.warning(f"Skipping item missing jinku_product_id/jinku_url at index {i}: {row!r}")
+                continue
+            jobs.append({"jinku_product_id": str(pid), "jinku_url": str(url)})
+
+        return jobs
+
+    def fetch_all_from_json_multithreaded(
+            self,
+            input_json_path: str,
+            output_json_path: str,
+            max_workers: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """
+        Reads input JSON (list of product ids + urls),
+        concurrently calls fetch_engine_related_data,
+        writes complete results to output_json_path.
+        Returns the collected results too.
+        """
+        jobs = self._load_jobs_from_json(input_json_path)
+        logger.info(f"Loaded {len(jobs)} jobs from {input_json_path}")
+
+        results: List[Dict[str, Any]] = []
+        # Keep a small map for debugging failures
+        failures: List[Dict[str, str]] = []
+
+        def worker(job: Dict[str, str]) -> Optional[Dict[str, Any]]:
+            return self.fetch_engine_related_data(job["jinku_product_id"], job["jinku_url"])
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(worker, job): job for job in jobs}
+
+            for future in as_completed(future_map):
+                job = future_map[future]
+                try:
+                    data = future.result()
+                    if data is None:
+                        failures.append(job)
+                        continue
+                    results.append(data)
+                except Exception as e:
+                    logger.exception(f"Failed job {job} with error: {e}")
+                    failures.append(job)
+
+        # Write output
+        out_payload = {
+            "count": len(results),
+            "failed_count": len(failures),
+            "failed": failures,  # keep this if you want; remove if you only want successes
+            "results": results,  # complete data
+        }
+
+        with open(output_json_path, "w", encoding="utf-8") as f:
+            json.dump(out_payload, f, ensure_ascii=False, indent=2)
+
+        logger.info(f"Wrote {len(results)} results to {output_json_path}. Failures: {len(failures)}")
+        return results
 
 if __name__ == '__main__':
     scraper = JinkuRequestHelper(
         # proxies=DATA_CENTER_PROXIES,
-        headers={}
+        # headers={}
     )
-    _url = 'https://www.cp.pt/passageiros/en/how-to-travel/Useful-information'
-    res = scraper.request('https://www.ifconfig.me/all.json')
-    print(res.json())
-    print(res.status_code)
+
+    input_file="unique_jinku_product_ids.json"
+    output_file="complete_engine_related_data.json"
+    # _jinku_product_id="BM21012"
+    # _jinku_url="https://jikiu.com/catalogue/49942991"
+    # all_details =scraper.fetch_engine_related_data(_jinku_product_id, _jinku_url)
+    scraper.fetch_all_from_json_multithreaded(
+        input_json_path=input_file,
+        output_json_path=output_file,
+        max_workers=100,
+    )
+    # print(all_details)
