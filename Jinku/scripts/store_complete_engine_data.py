@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
-from pymongo import MongoClient, UpdateOne
+from pymongo import MongoClient, UpdateMany
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
 
@@ -29,7 +29,7 @@ from common.custom_logger import get_logger
 
 # Mongo connection placeholders – update these or provide environment variables.
 MONGO_URI = os.environ.get(
-    "JINKU_MONGO_URI", "mongodb://mongo:DTpMpOfsDGAoFSUCjkEmbfGlwhaKqvhm@caboose.proxy.rlwy.net:33343/"
+    "JINKU_MONGO_URI", ""
 )
 MONGO_DB_NAME = os.environ.get("JINKU_MONGO_DB", "amip-trading-backend")
 MONGO_COLLECTION_NAME = os.environ.get("JINKU_MONGO_COLLECTION", "catalog_data_copy")
@@ -37,6 +37,7 @@ MONGO_COLLECTION_NAME = os.environ.get("JINKU_MONGO_COLLECTION", "catalog_data_c
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_FILE = ROOT_DIR / "complete_engine_related_data.json"
 BULK_BATCH_SIZE = 500
+FAILED_IDS_FILE = ROOT_DIR / "failed_jinku_product_ids.json"
 
 logging, listener = get_logger("Engine Data Script")
 listener.start()
@@ -206,10 +207,10 @@ def _build_token_sets(details: Sequence[dict]) -> Dict[str, List[str]]:
     }
 
 
-def _chunked(iterable: Iterable[UpdateOne], size: int) -> Iterable[List[UpdateOne]]:
-    """Yield UpdateOne operations in fixed-size batches."""
+def _chunked(iterable: Iterable[UpdateMany], size: int) -> Iterable[List[UpdateMany]]:
+    """Yield UpdateMany operations in fixed-size batches."""
 
-    batch: List[UpdateOne] = []
+    batch: List[UpdateMany] = []
     for op in iterable:
         batch.append(op)
         if len(batch) >= size:
@@ -219,19 +220,27 @@ def _chunked(iterable: Iterable[UpdateOne], size: int) -> Iterable[List[UpdateOn
         yield batch
 
 
-def _build_update_operations(records: Sequence[dict]) -> Iterable[UpdateOne]:
-    """Create the UpdateOne operations for every scraped record."""
+def _build_update_operations(records: Sequence[dict]) -> Iterable[tuple[str, UpdateMany]]:
+    """Create the UpdateMany operations for every scraped record."""
 
-    for record in records:
+    for idx, record in enumerate(records, 1):
         product_id = (record or {}).get("jinku_product_id")
         if not product_id:
+            logging.warning("Record #%d has no jinku_product_id, skipping", idx)
             continue
 
         normalized_details = _normalize_details(record.get("model_and_engine_details", []))
         token_sets = _build_token_sets(normalized_details)
         current_time = datetime.now(timezone.utc)
+        
+        logging.debug(
+            "Processing jinku_product_id: %s (record #%d) - %d model_and_engine_details",
+            product_id,
+            idx,
+            len(normalized_details),
+        )
 
-        yield UpdateOne(
+        yield product_id, UpdateMany(
             {"jinku_product_id": product_id},
             {
                 "$set": {
@@ -244,24 +253,79 @@ def _build_update_operations(records: Sequence[dict]) -> Iterable[UpdateOne]:
         )
 
 
-def _apply_updates(collection: Collection, operations: Iterable[UpdateOne]) -> tuple[int, int]:
-    """Execute the updates in batches and return matched/modified counts."""
+def _apply_updates(
+    collection: Collection, 
+    operations: Iterable[tuple[str, UpdateMany]]
+) -> tuple[int, int, List[dict]]:
+    """Execute the updates in batches and return matched/modified counts and failed IDs."""
 
     total_matched = 0
     total_modified = 0
+    failed_ids = []
+    processed_count = 0
+    
+    operations_list = list(operations)
+    total_operations = len(operations_list)
+    logging.info("Starting to process %d update operations", total_operations)
 
-    for batch in _chunked(operations, BULK_BATCH_SIZE):
-        result = collection.bulk_write(batch, ordered=False)
-        total_matched += result.matched_count
-        total_modified += result.modified_count
-        logging.info(
-            "Batch updated %s documents (matched=%s, modified=%s)",
-            len(batch),
-            result.matched_count,
-            result.modified_count,
-        )
+    for batch_idx, batch_with_ids in enumerate(_chunked(operations_list, BULK_BATCH_SIZE), 1):
+        batch_ids = [pid for pid, _ in batch_with_ids]
+        batch_ops = [op for _, op in batch_with_ids]
+        
+        try:
+            result = collection.bulk_write(batch_ops, ordered=False)
+            total_matched += result.matched_count
+            total_modified += result.modified_count
+            processed_count += len(batch_ops)
+            
+            logging.info(
+                "Batch #%d: Processed %d operations (matched=%d, modified=%d) - Progress: %d/%d (%.1f%%)",
+                batch_idx,
+                len(batch_ops),
+                result.matched_count,
+                result.modified_count,
+                processed_count,
+                total_operations,
+                (processed_count / total_operations * 100),
+            )
+            
+            # Log individual product IDs in this batch
+            for product_id in batch_ids:
+                logging.debug("Successfully processed jinku_product_id: %s", product_id)
+                
+        except PyMongoError as exc:
+            logging.error(
+                "Batch #%d failed with error: %s - Attempting individual updates",
+                batch_idx,
+                str(exc),
+            )
+            
+            # Try individual updates for failed batch
+            for product_id, operation in batch_with_ids:
+                try:
+                    result = collection.bulk_write([operation], ordered=False)
+                    total_matched += result.matched_count
+                    total_modified += result.modified_count
+                    processed_count += 1
+                    logging.info(
+                        "Individual update success for jinku_product_id: %s (matched=%d, modified=%d)",
+                        product_id,
+                        result.matched_count,
+                        result.modified_count,
+                    )
+                except PyMongoError as individual_exc:
+                    failed_ids.append({
+                        "jinku_product_id": product_id,
+                        "error": str(individual_exc),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    logging.error(
+                        "Failed to update jinku_product_id: %s - Error: %s",
+                        product_id,
+                        str(individual_exc),
+                    )
 
-    return total_matched, total_modified
+    return total_matched, total_modified, failed_ids
 
 
 def parse_args() -> argparse.Namespace:
@@ -286,6 +350,16 @@ def main() -> None:
 
     args = parse_args()
 
+    logging.info("=" * 80)
+    logging.info("Starting store_complete_engine_data.py")
+    logging.info("=" * 80)
+    logging.info("Data file: %s", args.data_file)
+    logging.info("Dry run: %s", args.dry_run)
+    logging.info("MongoDB URI: %s", MONGO_URI[:50] + "..." if len(MONGO_URI) > 50 else MONGO_URI)
+    logging.info("Database: %s", MONGO_DB_NAME)
+    logging.info("Collection: %s", MONGO_COLLECTION_NAME)
+    logging.info("=" * 80)
+
     records = _load_json_records(args.data_file)
     operations = list(_build_update_operations(records))
     logging.info("Prepared %s update operations", len(operations))
@@ -295,17 +369,49 @@ def main() -> None:
         return
 
     _validate_connection_details()
+    
+    logging.info("Connecting to MongoDB...")
     client = MongoClient(MONGO_URI)
     collection = client[MONGO_DB_NAME][MONGO_COLLECTION_NAME]
+    logging.info("Successfully connected to MongoDB")
 
     try:
-        matched, modified = _apply_updates(collection, operations)
-        logging.info("Completed updates (matched=%s, modified=%s).", matched, modified)
-    except PyMongoError as exc:
-        logging.exception("Mongo bulk write failed: %s", exc)
+        matched, modified, failed_ids = _apply_updates(collection, operations)
+        
+        logging.info("=" * 80)
+        logging.info("Update Summary:")
+        logging.info("  Total matched documents: %d", matched)
+        logging.info("  Total modified documents: %d", modified)
+        logging.info("  Total failed jinku_product_ids: %d", len(failed_ids))
+        logging.info("=" * 80)
+        
+        if failed_ids:
+            # Save failed IDs to JSON file
+            with FAILED_IDS_FILE.open("w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "total_failed": len(failed_ids),
+                        "failed_ids": failed_ids,
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    f,
+                    indent=2,
+                )
+            logging.warning(
+                "Saved %d failed jinku_product_ids to %s",
+                len(failed_ids),
+                FAILED_IDS_FILE,
+            )
+        else:
+            logging.info("All updates completed successfully - no failures!")
+            
+    except Exception as exc:
+        logging.exception("Unexpected error during update process: %s", exc)
         raise SystemExit(1) from exc
     finally:
+        logging.info("Closing MongoDB connection...")
         client.close()
+        logging.info("Script completed")
 
 
 if __name__ == "__main__":
